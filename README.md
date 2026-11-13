@@ -4,6 +4,11 @@ Browser-native pre-heap static-RAM Fortran compiler, virtual machine, RV32IM mic
 
 Live demo: https://cuzzo.github.io/forty/
 
+## Versions
+
+- `v0/` — Bare-minimum `fort.py` Appendix A baseline (~220 LoC compiler, 90 LoC VM, 108 LoC visualizer): `DIM`, `EQUIV`, `PRINT`, `IF/ELSE`, `DO`, `SUB`, `CALL`, and flat `Int32Array` execution. Live at https://cuzzo.github.io/forty/v0/
+- Root (`/`) — Full pre-heap static-RAM workbench adding `TAPE`, `DRUM`, `WHILE`, hardware traps, backpatching time-lapse, 2D matrix views, and the Stage 7 RV32IM micro-core. Live at https://cuzzo.github.io/forty/
+
 ## Files
 
 - `compiler.js` — Single-pass compiler (`tokenize`, `compile`, `emitRiscv`) targeting flat 4-tuple instructions and RV32IM assembly, with sidecar debug/backpatching metadata.
