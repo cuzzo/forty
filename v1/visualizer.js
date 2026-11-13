@@ -215,8 +215,10 @@ export function mount() {
       ramBox.append(el('div', {
         class: `cell ${cell.role}${flash}${isCode && i === activeIp ? ' pc' : ''}`,
         title: isCode ? describe(code[i], prog.cells) : '',
-        onMouseenter: () => [...linesBox.children].forEach((row, idx) => row.classList.toggle('hover', prog.cellLines[i].has(idx + 1))),
-        onMouseleave: () => [...linesBox.children].forEach((row) => row.classList.remove('hover')),
+        onMouseenter: () => (isCode
+          ? codeBox.querySelector(`[data-ip="${i}"]`)?.classList.add('hover')
+          : [...linesBox.children].forEach((row, idx) => row.classList.toggle('hover', prog.cellLines[i].has(idx + 1)))),
+        onMouseleave: () => [...linesBox.children, ...codeBox.children].forEach((row) => row.classList.remove('hover')),
       },
         ...(isCode
           ? [el('small', { text: `${i === nextIp ? '> ' : ''}${String(i).padStart(2, '0')}` })]
@@ -230,6 +232,7 @@ export function mount() {
       const isNext = i === nextIp;
       const row = el('div', {
         class: `line${active ? ' active' : ''}`,
+        'data-ip': i,
         title: describe(instr, prog.cells),
         onClick: () => render(i),
       },

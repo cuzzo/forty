@@ -255,7 +255,6 @@ function build(source, memSize, dataBase) {
   code.forEach((instr, ip) => {
     cells[ip] = { role: 'code', label: instr.join(' ') };
     initMem[ip] = encode(instr);
-    refs[ip].add(ipMap[ip]);
   });
   return { code, codeLen: code.length, initMem, usedCells: nextMem, cells, cellLines: refs, sym, subs, ipMap, events };
 }

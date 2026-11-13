@@ -128,7 +128,6 @@ test('v1 stores the program in memory ahead of its data', () => {
     prog.code.forEach((instr, ip) => {
       assert.deepEqual(decode(prog.initMem[ip]), instr);
       assert.equal(prog.cells[ip].role, 'code');
-      assert.ok(prog.cellLines[ip].has(prog.ipMap[ip]));
     });
     assert.ok(prog.cells.slice(prog.codeLen, prog.usedCells).every((cell) => cell.role !== 'code' && cell.role !== 'unused'));
     assert.ok(prog.cells.slice(prog.usedCells).every((cell) => cell.role === 'unused'));
