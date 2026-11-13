@@ -51,6 +51,20 @@ export function effect(prog, state) {
   return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[b], M[c])} -> ${name(a)}`;
 }
 
+// Hover text for one instruction: the opcode's name and what it does with these operands.
+export function describe([op, a, b, c], cells) {
+  const m = (i) => `M[${i}] ${cells[i]?.label ?? ''}`.trim();
+  if (op === 'MOV') return `MOV (move): copy ${m(b)} into ${m(a)}`;
+  if (op === 'LOAD_IND') return `LOAD_IND (load indirect): ${m(b)} holds an address; copy the cell at that address into ${m(a)}`;
+  if (op === 'STORE_IND') return `STORE_IND (store indirect): ${m(a)} holds an address; copy ${m(b)} into the cell at that address`;
+  if (op === 'PRINT') return `PRINT: print ${m(a)}`;
+  if (op === 'JMP') return `JMP (jump): go to instruction ${a}`;
+  if (op === 'JAL') return `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`;
+  if (op === 'JMP_IND') return `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`;
+  if (op === 'JZ') return `JZ (jump if zero): if ${m(b)} is 0, go to instruction ${a}; else go to the next one`;
+  return `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${ALU[op] && /[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
+}
+
 function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -164,6 +178,7 @@ export function mount() {
       const isNext = i === nextIp;
       const row = el('div', {
         class: `line${active ? ' active' : ''}`,
+        title: describe(instr, prog.cells),
         onClick: () => render(i),
       },
       el('span', { text: `${isNext ? '>' : ' '} ${String(i).padStart(2, '0')}: ${instr.join(' ')}` }),

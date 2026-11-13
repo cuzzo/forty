@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { createVM } from './vm.js';
-import { DEMOS, effect, marks } from './visualizer.js';
+import { DEMOS, describe, effect, marks } from './visualizer.js';
 
 function run(source) {
   const { code, initMem } = compile(source, 64);
@@ -69,4 +69,20 @@ test('v0 says what the next instruction will do, in the names of its cells', () 
   assert.ok(seen.some((line) => line.startsWith('call ')));
   assert.ok(seen.some((line) => line.startsWith('return to ')));
   assert.ok(seen.some((line) => line.startsWith('print ')));
+});
+
+test('v0 names every opcode on hover', () => {
+  const seen = new Set();
+  for (const demo of Object.values(DEMOS)) {
+    const prog = compile(demo.code, 64);
+    for (const instr of prog.code) {
+      const text = describe(instr, prog.cells);
+      assert.ok(text.startsWith(`${instr[0]} `) || text.startsWith(`${instr[0]}:`), text);
+      seen.add(instr[0]);
+    }
+  }
+  for (const op of ['MOV', 'LOAD_IND', 'STORE_IND', 'PRINT', 'JMP', 'JAL', 'JMP_IND', 'JZ', '+', '<=']) assert.ok(seen.has(op), op);
+  const fact = compile(DEMOS.factorial.code, 64);
+  assert.equal(describe(['JZ', 9, 5, 0], fact.cells), 'JZ (jump if zero): if M[5] tmp_5 is 0, go to instruction 9; else go to the next one');
+  assert.equal(describe(['<=', 5, 4, 0], fact.cells), '<=: M[5] tmp_5 = M[4] I <= M[0] N (1 if true, 0 if false)');
 });
