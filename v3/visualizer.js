@@ -1,5 +1,5 @@
 import { compile } from './compiler.js';
-import { ALU, CARD_ROWS, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, headAt, ioWait } from './vm.js';
+import { ALU, DRUM_WORD_CYCLES, GAP, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, headAt, ioWait } from './vm.js';
 
 export const MEM_SIZE = 128;
 
@@ -83,7 +83,6 @@ export function effect(prog, state) {
   if (state.io) {
     const { kind, sector, addr, done } = state.io;
     const wait = ioWait(state);
-    if (kind === 'punch') return `punching ${state.io.value} onto a card: row ${PUNCH_ORDER[done]} in ${cyc(wait + 1)}`;
     if (kind === 'rewind') return `rewinding: ${cyc(wait)} left`;
     if (kind === 'tape') {
       if (wait) return done ? `reading tape record ${record + 1}: next word in ${cyc(wait)}` : `tape starting: ${cyc(wait)} left`;
@@ -98,7 +97,7 @@ export function effect(prog, state) {
   if (op === 'MOV') return `${val(b)} -> ${name(a)}`;
   if (op === 'LOAD_IND') return `${via(b)} (${M[M[b]]}) -> ${name(a)}`;
   if (op === 'STORE_IND') return `${val(b)} -> ${via(a)}`;
-  if (op === 'PRINT') return `punch ${val(a)} onto a card, taking ${cyc(CARD_ROWS * ROW_CYCLES)}`;
+  if (op === 'PRINT') return `print ${val(a)}`;
   if (op === 'JMP') return `jump to ${a}`;
   if (op === 'JAL') return `call ${b}, return to ${state.ip + 1} -> ${name(a)}`;
   if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
@@ -125,7 +124,7 @@ export function describe([op, a, b, c], cells) {
   if (op === 'MOV') return `MOV (move): copy ${m(b)} into ${m(a)}`;
   if (op === 'LOAD_IND') return `LOAD_IND (load indirect): ${m(b)} holds an address; copy the cell at that address into ${m(a)}`;
   if (op === 'STORE_IND') return `STORE_IND (store indirect): ${m(a)} holds an address; copy ${m(b)} into the cell at that address`;
-  if (op === 'PRINT') return `PRINT: punch ${m(a)} onto a card`;
+  if (op === 'PRINT') return `PRINT: print ${m(a)}`;
   if (op === 'JMP') return `JMP (jump): go to instruction ${a}`;
   if (op === 'JAL') return `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`;
   if (op === 'JMP_IND') return `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`;
@@ -154,42 +153,6 @@ export function compileView(prog, k) {
   return view;
 }
 
-// A card's 12 rows from its top edge. A number is punched right-justified in columns 1-10, Hollerith style: each
-// digit in its own row, '-' in row 11.
-const CARD_ROWS_TOP = [12, 11, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-// A punch takes the card 9-edge first, so row 9 is punched first and row 12 last.
-export const PUNCH_ORDER = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 11, 12];
-
-export function cardPunches(value) {
-  return [...String(value).padStart(10)].flatMap((ch, col) => (ch === ' ' ? [] : [{ col, row: ch === '-' ? 11 : Number(ch) }]));
-}
-
-function svg(tag, attrs, ...kids) {
-  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  node.append(...kids);
-  return node;
-}
-
-// One pattern per digit row, so every card can print 0-9 down all 80 columns, as IBM's cards were printed.
-function cardDigitPatterns() {
-  return svg('svg', { width: 0, height: 0, style: 'position: absolute' }, svg('defs', {},
-    ...Array.from({ length: 10 }, (_, d) => svg('pattern', { id: `card-row-${d}`, width: 1, height: 2.5, patternUnits: 'userSpaceOnUse' },
-      svg('text', { x: 0.5, y: 1.9, class: 'printed' }, String(d))))));
-}
-
-// An 80-column card with the first `rows` rows of PUNCH_ORDER punched, and the number printed along its top edge.
-function card(value, rows = PUNCH_ORDER.length) {
-  const punched = new Set(PUNCH_ORDER.slice(0, rows));
-  const rowY = (row) => 5 + CARD_ROWS_TOP.indexOf(row) * 2.5;
-  return svg('svg', { class: 'card', viewBox: '0 0 84 37' },
-    svg('polygon', { points: '3,0 84,0 84,37 0,37 0,3', class: 'stock' }),
-    ...Array.from({ length: 10 }, (_, d) => svg('rect', { x: 2, y: rowY(d), width: 80, height: 2.5, fill: `url(#card-row-${d})` })),
-    ...[...String(value).padStart(10)].map((ch, col) => svg('text', { x: 2.5 + col, y: 3.4 }, ch)),
-    ...(rows < PUNCH_ORDER.length ? [svg('rect', { x: 2, y: rowY(PUNCH_ORDER[rows]), width: 80, height: 2.5, class: 'punching' })] : []),
-    ...cardPunches(value).filter(({ row }) => punched.has(row)).map(({ col, row }) => svg('rect', { x: 2.05 + col, y: rowY(row) + 0.3, width: 0.9, height: 1.9, class: 'hole' })));
-}
-
 function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -209,7 +172,6 @@ export function mount() {
   const ramBox = document.getElementById('ram');
   const codeBox = document.getElementById('code');
   const outBox = document.getElementById('out');
-  document.body.append(cardDigitPatterns());
   const statusBox = document.getElementById('status');
   const effectBox = document.getElementById('effect');
   const speedBox = document.getElementById('speed');
@@ -314,7 +276,7 @@ export function mount() {
       renderDrum(DEMOS[demoSel.value].drum ?? drumLayout(1), 0, null);
       statusBox.textContent = 'not compiled';
       effectBox.textContent = '';
-      outBox.replaceChildren();
+      outBox.textContent = '';
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
       ramBox.replaceChildren();
@@ -333,8 +295,7 @@ export function mount() {
       ? `compiling: ${building}/${prog.events.length}`
       : `pc ${s.pc ?? '-'} | next ${nextIp ?? '-'} | cycle ${s.cycles} | waited ${s.waited}${s.halted ? ' | HALTED' : ''}`;
     effectBox.textContent = view ? '' : effect(prog, s);
-    outBox.replaceChildren(...s.stdout.map((value) => card(value)), ...(s.io?.kind === 'punch' ? [card(s.io.value, s.io.done)] : []));
-    outBox.scrollTop = outBox.scrollHeight;
+    outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
     srcBox.value.split('\n').forEach((_, idx) => {
@@ -433,11 +394,10 @@ export function mount() {
     }
   }
 
-  // Every cycle takes the same time, except that words coming off a device and card rows are slowed down to watch.
+  // Every cycle takes the same time, except that a word coming off the drum is slowed down to watch.
   function delay() {
     if (building !== null) return 80;
     const s = vm.getState();
-    if (s.io?.kind === 'punch') return 40;
     return s.io?.done ? 120 : 12;
   }
 
@@ -454,8 +414,8 @@ export function mount() {
     timer = setTimeout(tick, 0);
   }
 
-  // One compile event while walking the compile, else one instruction, one word read, one card row punched, or up
-  // to one sector of a device wait; false once halted.
+  // One compile event while walking the compile, else one instruction, one word read, or up to one sector of a
+  // device wait; false once halted.
   function advance() {
     if (building !== null) {
       building++;
@@ -464,14 +424,11 @@ export function mount() {
     }
     if (!prog) load(false);
     if (vm.getState().halted) return false;
-    const done = vm.getState().io?.done;
     let n = 0;
-    let io;
     do {
       last = vm.step();
       n++;
-      io = vm.getState().io;
-    } while (io && io.done === done && n < (io.kind === 'punch' ? ROW_CYCLES : SECTOR_WORDS * DRUM_WORD_CYCLES));
+    } while (vm.getState().io && !last.writes.length && n < SECTOR_WORDS * DRUM_WORD_CYCLES);
     batches.push(n);
     return !last.halted;
   }

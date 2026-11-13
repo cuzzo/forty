@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
-import { CARD_ROWS, DRUM_WORD_CYCLES, GAP, RECORD_SPAN, REWIND_SPEED, ROW_CYCLES, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, encode, headAt, ioWait } from './vm.js';
-import { DEMOS, MEM_SIZE, PUNCH_ORDER, TAPE_DATA, cardPunches, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
+import { DRUM_WORD_CYCLES, GAP, RECORD_SPAN, REWIND_SPEED, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, encode, headAt, ioWait } from './vm.js';
+import { DEMOS, MEM_SIZE, TAPE_DATA, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
 
 function run(source) {
   const vm = createVM(layout(source, MEM_SIZE).initMem);
@@ -68,7 +68,7 @@ test('v3 says what the next instruction will do, in the names of its cells', () 
   assert.ok(seen.some((line) => / -> \*SWAP\.A = const\(2\) \[\d+\]$/.test(line)), seen.join('\n'));
   assert.ok(seen.some((line) => line.startsWith('call ')));
   assert.ok(seen.some((line) => line.startsWith('return to ')));
-  assert.ok(seen.some((line) => line.startsWith('punch ')));
+  assert.ok(seen.some((line) => line.startsWith('print ')));
   assert.equal(seen.at(-1), 'halt');
 });
 
@@ -160,7 +160,7 @@ test('v3 streams a 128-word drum array through an 8-word buffer, with far fewer 
   assert.deepEqual(seq.state.stdout, [8256]);
   assert.deepEqual(skip.state.stdout, [8256]);
   assert.ok(seq.prog.usedCells + 128 > MEM_SIZE);
-  assert.deepEqual([seq.state.waited, skip.state.waited], [15775 + CARD_ROWS * ROW_CYCLES, 2335 + CARD_ROWS * ROW_CYCLES]);
+  assert.deepEqual([seq.state.waited, skip.state.waited], [15775, 2335]);
   assert.equal(drumLayout(5)[5 * SECTOR_WORDS], 9);
   assert.equal(drumLayout(1)[1 * SECTOR_WORDS], 9);
 });
@@ -189,7 +189,7 @@ test('v3 DRUM_READ waits for its sector, copies a word every 4 cycles, and steps
   assert.deepEqual([vm.getState().io.done, vm.getState().MEM[b + 1], vm.getState().cycles], [1, 0, 1028]);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [8]);
-  assert.equal(vm.getState().cycles, 1057 + CARD_ROWS * ROW_CYCLES);
+  assert.equal(vm.getState().cycles, 1057);
   assert.equal(ioWait({ io: { kind: 'drum', sector: 3, done: 0 }, cycles: 130 }), 990);
   assert.equal(ioWait({ io: null, cycles: 5 }), 0);
   assert.deepEqual(headAt(130), { sector: 4, word: 0 });
@@ -216,7 +216,7 @@ test('v3 reads the tape in order cheaply but pays a rewind to go back', () => {
   const { vm } = runTape(DEMOS.tape.code);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [153, 1]);
-  assert.equal(vm.getState().waited, 21 * RECORD_SPAN + (20 * RECORD_SPAN) / REWIND_SPEED + 2 * CARD_ROWS * ROW_CYCLES);
+  assert.equal(vm.getState().waited, 21 * RECORD_SPAN + (20 * RECORD_SPAN) / REWIND_SPEED);
   assert.ok((20 * RECORD_SPAN) / REWIND_SPEED > SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES);
 });
 
@@ -299,23 +299,4 @@ test('v3 reads the tape into a SUB array argument', () => {
   const vm = createVM(prog.initMem, [], TAPE_DATA);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [8]);
-});
-
-test('v3 punches a number into columns 1-10 of a card, a row per digit and row 11 for minus', () => {
-  assert.deepEqual(cardPunches(120), [{ col: 7, row: 1 }, { col: 8, row: 2 }, { col: 9, row: 0 }]);
-  assert.deepEqual(cardPunches(-5), [{ col: 8, row: 11 }, { col: 9, row: 5 }]);
-  assert.deepEqual(PUNCH_ORDER.slice(0, 2), [9, 8]);
-});
-
-test('v3 PRINT holds the program while the card punch does 12 rows of ROW_CYCLES', () => {
-  const prog = layout('X = 0 - 5\nPRINT X', MEM_SIZE);
-  const vm = createVM(prog.initMem);
-  while (!vm.getState().io) vm.step();
-  assert.equal(effect(prog, vm.getState()), 'punching -5 onto a card: row 9 in 2083 cycles');
-  while (vm.getState().io.done < 1) vm.step();
-  assert.equal(effect(prog, vm.getState()), 'punching -5 onto a card: row 8 in 2083 cycles');
-  assert.deepEqual(vm.getState().stdout, []);
-  while (!vm.getState().halted) vm.step();
-  assert.deepEqual(vm.getState().stdout, [-5]);
-  assert.equal(vm.getState().waited, CARD_ROWS * ROW_CYCLES);
 });

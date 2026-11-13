@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { createVM, decode, encode } from './vm.js';
-import { DEMOS, MEM_SIZE, PUNCH_ORDER, cardPunches, compileView, describe, effect, layout, marks } from './visualizer.js';
+import { DEMOS, MEM_SIZE, compileView, describe, effect, layout, marks } from './visualizer.js';
 
 function run(source) {
   const vm = createVM(layout(source, MEM_SIZE).initMem);
@@ -68,7 +68,7 @@ test('v1 says what the next instruction will do, in the names of its cells', () 
   assert.ok(seen.some((line) => / -> \*SWAP\.A = const\(2\) \[\d+\]$/.test(line)), seen.join('\n'));
   assert.ok(seen.some((line) => line.startsWith('call ')));
   assert.ok(seen.some((line) => line.startsWith('return to ')));
-  assert.ok(seen.some((line) => line.startsWith('punch ')));
+  assert.ok(seen.some((line) => line.startsWith('print ')));
   assert.equal(seen.at(-1), 'halt');
 });
 
@@ -171,10 +171,4 @@ test('v1 undoes a step that faults, so stepping again faults again', () => {
   assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
   assert.throws(() => createVM([encode(['JMP_IND', 1, 0, 0]), -1]).step(), /Memory address out of bounds: -1/);
   assert.equal(effect(layout('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
-});
-
-test('v1 punches a number into columns 1-10 of a card, a row per digit and row 11 for minus', () => {
-  assert.deepEqual(cardPunches(120), [{ col: 7, row: 1 }, { col: 8, row: 2 }, { col: 9, row: 0 }]);
-  assert.deepEqual(cardPunches(-5), [{ col: 8, row: 11 }, { col: 9, row: 5 }]);
-  assert.deepEqual(PUNCH_ORDER.slice(0, 2), [9, 8]);
 });
