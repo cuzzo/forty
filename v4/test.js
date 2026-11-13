@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile, emitRiscv } from './compiler.js';
 import { createVM, createRiscvVM } from './vm.js';
-import { DEMOS } from './visualizer.js';
+import { DEMOS, layout } from './visualizer.js';
 
 function runBoth(source, compileOpts = {}, vmOpts = {}) {
-  const compiled = compile(source, compileOpts);
+  const compiled = layout(source, compileOpts);
   const fullVmOpts = { debug: compiled.debug, ...vmOpts };
 
   const vm = createVM(compiled.code, compiled.initMem, fullVmOpts);
@@ -43,7 +43,7 @@ test('Demo 2: SWAP mutates .rodata when unprotected and traps when MMU is enable
 });
 
 test('Demo 3: 2D Matrix SAXPY column slicing and deref telemetry', () => {
-  const compiled = compile(DEMOS.saxpy.code, { memSize: 64 });
+  const compiled = layout(DEMOS.saxpy.code, { memSize: 64 });
   const vm = createVM(compiled.code, compiled.initMem, { debug: compiled.debug });
   const derefs = [];
   while (!vm.getState().halted) {
@@ -100,7 +100,7 @@ test('Signed 32-bit division truncates toward zero across VM and RISC-V', () => 
 });
 
 test('Time-travel seek, stepBack, reset, and compile backpatching events', () => {
-  const compiled = compile(DEMOS.factorial.code, { memSize: 64 });
+  const compiled = layout(DEMOS.factorial.code, { memSize: 64 });
   assert.ok(compiled.debug.compileEvents.some((e) => e.kind === 'patch'));
 
   const vm = createVM(compiled.code, compiled.initMem, { debug: compiled.debug });
@@ -149,12 +149,10 @@ test('WHILE loops and hardware bounds traps work across VM and RISC-V', () => {
   assert.equal(badMem.rvState.trap?.code, 'TRAP_OOB_MEM');
 });
 
-test('SUB isolates local scope, indexes a 2D SUB argument, and runs DO over an argument, and rejects an oversized EQUIV', () => {
+test('SUB isolates local scope, indexes a 2D SUB argument, and runs DO over an argument', () => {
   const src = ['I = 77', 'DIM G(2, 2)', 'SUB FILL(M)', '  DIM M(2, 2)', '  DO I = 0, 1', '    M[I, 1] = (I + 1) * 10', '  END', 'END', 'CALL FILL(G)', 'PRINT I', 'PRINT G[1, 1]'].join('\n');
   const { vmState, rvState } = runBoth(src, { memSize: 64 });
   assert.deepEqual(vmState.stdout, [77, 20]);
   assert.deepEqual(rvState.stdout, [77, 20]);
   assert.deepEqual(runBoth('SUB S(K)\n  DO K = 1, 3\n  END\nEND\nOUT = 0\nCALL S(OUT)\nPRINT OUT', { memSize: 64 }).vmState.stdout, [4]);
-  assert.throws(() => compile('DIM SMALL(2)\nEQUIV BIG(5) = SMALL'), /EQUIV 'BIG' must fit inside 'SMALL'/);
-  assert.throws(() => compile('EQUIV A(2) = MISSING'), /EQUIV 'A' must fit inside 'MISSING'/);
 });

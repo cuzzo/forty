@@ -10,13 +10,14 @@ Live demo: https://cuzzo.github.io/forty/v3
 | [v0](v0/) | Minimal Compiler | ~220 SLoC |
 | [v1](v1/) | Adds instruction visualization | ~8 SLoC |
 | [v2](v2/) | Adds the "drum" (ancient hard drive) | ~15 SLoC |
-| [v2](v3/) | Adds the "tape" (bigger, worse hard drive) | ~10 SLoC |
+| [v3](v3/) | Adds the "tape" (bigger, worse hard drive) | ~10 SLoC |
+| [v4](v4/) | Adds a RISC-V backend | ~105 SLoC |
 
 The minimal compiler assumes knowledge of how tokenizing and machine code works.
 
 For an example of how that works, see [Puck](https://github.com/cuzzo/clear/tree/master/examples/puck/README.md), which starts at ~80 SLoC, and has 10 versions of its own.
 
-## Files
+## Files (v4)
 
 - `compiler.js` — Single-pass compiler (`tokenize`, `compile`, `emitRiscv`) targeting flat 4-tuple instructions and RV32IM assembly, with sidecar debug/backpatching metadata.
 - `vm.js` — Time-travel flat-RAM VM (`createVM`) and shared-`ArrayBuffer` RV32IM micro-core (`createRiscvVM`) with hardware traps, 4 magnetic tape drives, and rotating magnetic drum DMA.
@@ -26,7 +27,7 @@ For an example of how that works, see [Puck](https://github.com/cuzzo/clear/tree
 
 ## Run in Browser
 
-Serve the directory over HTTP (required for ES modules) and open `index.html`:
+Serve the directory over HTTP (required for ES modules) and open a version's `index.html`, e.g. `v4/index.html`:
 
 ```sh
 python3 -m http.server 8000

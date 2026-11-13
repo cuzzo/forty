@@ -153,6 +153,28 @@ function fmtInstr(instr) {
   return `${instr[0].padEnd(10)} ${instr[1]}, ${instr[2]}, ${instr[3]}`;
 }
 
+const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
+
+function cellLabelFor(name, i, dims) {
+  if (!dims) return name;
+  if (dims.length === 2) return `${name}[${i % dims[0]},${Math.floor(i / dims[0])}]`;
+  return `${name}[${i}]`;
+}
+
+// The compiled program plus each memory cell's role, label and EQUIV aliases, built from the compiler's allocations.
+export function layout(source, options) {
+  const compiled = compile(source, options);
+  const { allocs, aliases } = compiled.debug;
+  const cells = Array.from({ length: compiled.usedCells }, () => ({ role: 'unused', label: '', aliases: [] }));
+  for (const { base, size, role, label, dims } of allocs) {
+    for (let i = 0; i < size; i++) cells[base + i] = { role, label: label ? cellLabelFor(label, i, dims) : `tmp_${base + i}`, aliases: [] };
+  }
+  for (const { name, addr, dims } of aliases) {
+    for (let i = 0; i < span(dims); i++) cells[addr + i]?.aliases.push(cellLabelFor(name, i, dims));
+  }
+  return { ...compiled, debug: { ...compiled.debug, cells } };
+}
+
 function replayCompileEvents(events, limit) {
   const code = [];
   let lastPatchedIp = -1;
@@ -162,7 +184,7 @@ function replayCompileEvents(events, limit) {
       code[ev.ip] = [...ev.instr];
       lastPatchedIp = -1;
     } else if (ev.kind === 'patch') {
-      code[ev.ip] = [...ev.after];
+      code[ev.ip] = [...ev.instr];
       lastPatchedIp = ev.ip;
     }
   }
@@ -247,7 +269,7 @@ export function mountVisualizer(doc = document) {
     const initDrum = demo?.drumSeed ? new Int32Array(demo.drumSeed) : null;
 
     try {
-      compiled = compile(dom.source.value, { memSize });
+      compiled = layout(dom.source.value, { memSize });
       const vmOpts = { debug: compiled.debug, protectRodata, initTape: parseTape(), initDrum };
       if (target === 'riscv') {
         const asm = emitRiscv(compiled.code, compiled.initMem, compiled.usedCells);
@@ -394,7 +416,7 @@ export function mountVisualizer(doc = document) {
       dom.codeList.append(el('div', {
         class: cls,
         onClick: () => {
-          selectedLine = compiled.debug.ipMap[i]?.line ?? null;
+          selectedLine = compiled.debug.ipMap[i] ?? null;
           renderSourceLines(selectedLine);
         },
       },
@@ -476,7 +498,7 @@ export function mountVisualizer(doc = document) {
     dom.stepBackBtn.disabled = state.steps === 0;
     dom.stepBtn.disabled = state.halted;
 
-    const activeLine = selectedLine ?? compiled.debug.ipMap[lastEvent?.pc ?? state.ip]?.line ?? null;
+    const activeLine = selectedLine ?? compiled.debug.ipMap[lastEvent?.pc ?? state.ip] ?? null;
     renderSourceLines(activeLine);
     renderRam(state);
     renderCode(state);
