@@ -141,29 +141,14 @@
     .cell[data-role="rodata"] { border-left-color: var(--rodata); }
     .cell[data-role="bss"] { border-left-color: var(--bss); }
     .cell[data-role="linkage_param"],
-    .cell[data-role="linkage_ret"],
-    .cell[data-role="linkage_sp"] { border-left-color: var(--linkage); }
+    .cell[data-role="linkage_ret"] { border-left-color: var(--linkage); }
     .cell[data-role="scratch"] { border-left-color: var(--scratch); }
-    .cell[data-role="sys_ptr"] { border-left-color: var(--sys); }
-    .cell[data-role="heap"] { border-left-color: var(--heap); background: rgba(20, 184, 166, 0.06); }
-    .cell[data-role="stack"] { border-left-color: var(--stack); background: rgba(244, 63, 94, 0.06); }
     .cell[data-role="unused"] { border-left-color: #30363d; opacity: 0.65; }
     .cell.flash-read { outline: 2px solid var(--read); background: rgba(34, 211, 238, 0.14); }
     .cell.flash-write { outline: 2px solid var(--write); background: rgba(251, 146, 60, 0.18); }
     .cell-top { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); }
     .cell-val { font-size: 14px; font-weight: 700; text-align: center; }
     .cell-lbl { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ptr-badges { display: flex; gap: 3px; }
-    .badge {
-      font-size: 9px;
-      padding: 0 4px;
-      border-radius: 3px;
-      font-weight: 700;
-      color: #0d1117;
-    }
-    .badge.hp { background: var(--heap); }
-    .badge.sp { background: var(--stack); color: #fff; }
-    .badge.hdr { background: #38bdf8; }
     .split-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     @media (max-width: 1200px) { .split-row { grid-template-columns: 1fr; } }
     .list-box {

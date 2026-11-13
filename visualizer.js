@@ -132,7 +132,7 @@ export const DEMOS = {
 };
 
 const RV_DISPLAY_REGS = [
-  ['s0', 8], ['t0', 5], ['t1', 6], ['a0', 10], ['a1', 11], ['a2', 12], ['a7', 17], ['ra', 1], ['sp', 2],
+  ['s0', 8], ['t0', 5], ['t1', 6], ['a0', 10], ['a1', 11], ['a2', 12], ['a7', 17],
 ];
 
 function el(tag, attrs = {}, ...children) {
