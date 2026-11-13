@@ -32,6 +32,17 @@ export function marks(ipMap, state, focusIp = null) {
   };
 }
 
+// The compiler's output plus each memory cell's role and label, built from its allocations.
+export function layout(source, memSize) {
+  const prog = compile(source, memSize);
+  const cells = Array.from({ length: prog.initMem.length }, (_, i) => (i < prog.codeLen ? { role: 'code', label: prog.code[i].join(' ') } : { role: 'unused', label: '' }));
+  for (const { kind, base, size, role, label } of prog.events) {
+    if (kind !== 'alloc') continue;
+    for (let i = 0; i < size; i++) cells[base + i] = { role, label: size > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
+  }
+  return { ...prog, cells };
+}
+
 // What the next instruction will do, in the names of the cells it touches.
 export function effect(prog, state) {
   if (state.halted) return 'halted';
@@ -236,7 +247,7 @@ export function mount() {
   }
 
   function load(walk) {
-    prog = compile(srcBox.value, 64);
+    prog = layout(srcBox.value, 64);
     vm = createVM(prog.code, prog.initMem);
     last = { reads: [], writes: [] };
     building = walk ? 0 : null;

@@ -1,5 +1,5 @@
 """Bug bits of forty's production code (every .js except test.js) at one or more revisions, per directory
-(root, v0..v3), measured with min-giga: each directory's files at REV copied into a fresh Git repository and run
+(root, v0..v3), and of each directory's compiler.js alone, measured with min-giga: each directory's files at REV copied into a fresh Git repository and run
 through `decomplex-rust facts . --bug-surface --no-semantic-index`, reading corpus_totals.bug_surface.structural.
 Usage: python3 metrics/src/bug_bits.py REV [REV...]
 Writes metrics/data/bug_bits/REV.json for each revision and prints one line each."""
@@ -22,9 +22,9 @@ def git(*args, cwd=ROOT):
     return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True).stdout
 
 
-def measure_dir(rev, path):
+def measure_dir(rev, path, only=None):
     names = git('ls-tree', '--name-only', f'{rev}:{path}' if path != '.' else rev).decode().split()
-    files = [n for n in names if n.endswith('.js') and n != 'test.js']
+    files = [n for n in names if n.endswith('.js') and n != 'test.js' and only in (None, n)]
     with tempfile.TemporaryDirectory() as directory:
         for name in files:
             Path(directory, name).write_bytes(git('show', f'{rev}:{name if path == "." else f"{path}/{name}"}'))
@@ -39,7 +39,9 @@ def measure_dir(rev, path):
 def measure(rev):
     full = git('rev-parse', rev).decode().strip()
     dirs = {path: measure_dir(full, path) for path in DIRS}
-    out = {'rev': full[:8], 'dirs': dirs, 'total': {key: round(sum(d[key] for d in dirs.values()), 1) for key in KEYS}}
+    compilers = {path: measure_dir(full, path, 'compiler.js') for path in DIRS}
+    total = lambda group: {key: round(sum(d[key] for d in group.values()), 1) for key in KEYS}
+    out = {'rev': full[:8], 'dirs': dirs, 'total': total(dirs), 'compilers': compilers, 'compiler_total': total(compilers)}
     target = ROOT / 'metrics/data/bug_bits' / f'{full[:8]}.json'
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(out, indent=1) + '\n')

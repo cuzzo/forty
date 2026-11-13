@@ -17,7 +17,6 @@ export function tokenize(source) {
 export function compile(source, memSize = 256) {
   const tokens = tokenize(source);
   const initMem = new Int32Array(memSize);
-  const cells = Array.from({ length: memSize }, () => ({ role: 'unused', label: '' }));
   const refs = Array.from({ length: memSize }, () => new Set());
   const consts = new Map();
   const subs = Object.create(null);
@@ -25,11 +24,9 @@ export function compile(source, memSize = 256) {
   const ipMap = [];
   const events = [];
   let sym = Object.create(null);
-  let currentSub = null;
   let pos = 0;
   let nextMem = 0;
   let line = 1;
-  const scoped = (name) => (currentSub ? `${currentSub}.${name}` : name);
 
   function touch(addr, size = 1) {
     for (let i = 0; i < size; i++) refs[addr + i].add(line);
@@ -39,11 +36,8 @@ export function compile(source, memSize = 256) {
     if (nextMem + size > memSize) throw new Error(`RAM overflow (${memSize} cells)`);
     const base = nextMem;
     nextMem += size;
-    for (let i = 0; i < size; i++) {
-      cells[base + i] = { role, label: size > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
-    }
     touch(base, size);
-    events.push({ kind: 'alloc', base, size, line });
+    events.push({ kind: 'alloc', base, size, line, role, label });
     return base;
   }
 
@@ -70,7 +64,7 @@ export function compile(source, memSize = 256) {
   }
 
   function getVar(name) {
-    if (!(name in sym)) sym[name] = { addr: alloc(1, 'bss', scoped(name)), dims: null, isRef: false };
+    if (!(name in sym)) sym[name] = { addr: alloc(1, 'bss', name), dims: null, isRef: false };
     touch(sym[name].addr, span(sym[name].dims));
     return sym[name];
   }
@@ -161,7 +155,7 @@ export function compile(source, memSize = 256) {
         eat('DIM');
         const { name, dims } = parseDecl();
         if (sym[name]?.isRef) { sym[name].dims = dims; touch(sym[name].addr); }
-        else sym[name] = { addr: alloc(span(dims), 'bss', scoped(name)), dims, isRef: false };
+        else sym[name] = { addr: alloc(span(dims), 'bss', name), dims, isRef: false };
       } else if (tok === 'EQUIV') {
         eat('EQUIV');
         const { name, dims } = parseDecl();
@@ -214,9 +208,7 @@ export function compile(source, memSize = 256) {
         const name = eat();
         eat('(');
         const savedSym = sym;
-        const savedSub = currentSub;
         sym = Object.create(null);
-        currentSub = name;
         const params = [];
         while (peek() !== ')') {
           const p = eat();
@@ -232,7 +224,6 @@ export function compile(source, memSize = 256) {
         parseBlock();
         eat('END');
         sym = savedSym;
-        currentSub = savedSub;
         emit('JMP_IND', retSlot, 0, 0);
         patch(skipIdx, ['JMP', code.length, 0, 0]);
       } else if (tok === 'CALL') {
@@ -260,5 +251,5 @@ export function compile(source, memSize = 256) {
 
   parseBlock();
   if (pos < tokens.length) throw new SyntaxError(`Unexpected '${tokens[pos].text}' at line ${tokens[pos].line}`);
-  return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), cellLines: refs.slice(0, nextMem), sym, subs, ipMap, events };
+  return { code, initMem, usedCells: nextMem, cellLines: refs.slice(0, nextMem), sym, subs, ipMap, events };
 }
