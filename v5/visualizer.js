@@ -1,5 +1,5 @@
 import { compile } from './compiler.js';
-import { ALU, CARD_ROWS, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, headAt, ioWait, tagOf } from './vm.js';
+import { ALU, CARD_ROWS, COST, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, headAt, ioWait, tagOf } from './vm.js';
 
 export const MEM_SIZE = 128;
 
@@ -123,7 +123,7 @@ export function effect(prog, state) {
   if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
   if (op === 'JZ') return M[ea(b)] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
   if (op === 'DRUM_READ') {
-    const wait = ioWait({ io: { kind: 'drum', sector: M[b], done: 0 }, cycles: state.cycles + 1 });
+    const wait = ioWait({ io: { kind: 'drum', sector: M[b], done: 0 }, cycles: state.cycles + COST.DRUM_READ });
     return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + SECTOR_WORDS - 1)}, waiting ${cyc(wait)} first`;
   }
   if (op === 'TAPE_READ') {

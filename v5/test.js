@@ -141,8 +141,10 @@ test('v5 explains the index register instructions and indexed operands', () => {
 test('v5 DRUM_READ waits for its sector, then copies a word every DRUM_WORD_CYCLES', () => {
   const prog = layout('DIM B(8)\nREAD DRUM 0, B\nPRINT B[7]', MEM_SIZE);
   const vm = createVM(prog.initMem, drumLayout(1));
+  const said = effect(prog, vm.getState());
   vm.step();
   assert.equal(vm.getState().cycles, COST.DRUM_READ);
+  assert.match(said, new RegExp(`waiting ${ioWait(vm.getState())} cycles first$`));
   assert.equal(ioWait(vm.getState()), TURN - COST.DRUM_READ);
   while (!vm.getState().MEM[prog.sym.B.addr]) vm.step();
   assert.equal(vm.getState().cycles, TURN + 1);
