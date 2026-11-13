@@ -229,18 +229,12 @@ test('v2 undoes a step that faults, so stepping again faults again', () => {
   assert.throws(() => vm.step(), /Division by zero/);
   assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
   assert.throws(() => createVM([encode(['JMP_IND', 1, 0, 0]), -1]).step(), /Memory address out of bounds: -1/);
-  assert.throws(() => encode(['BOGUS', 0, 0, 0]), /Unknown opcode: BOGUS/);
-  assert.throws(() => encode(['MOV', 512, 0, 0]), /Operand out of 9-bit range/);
   assert.equal(effect(compile('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
 });
 
-test('v2 reads the drum into a SUB array argument through its pointer', () => {
-  const prog = compile('DIM BIG(16)\nSUB LOAD(S, DST)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', MEM_SIZE);
-  assert.match(describe(prog.code.find((instr) => instr[0] === 'DRUM_READ'), prog.cells), /into the cell pointed to by/);
-  const vm = createVM(prog.initMem, drumLayout(1));
-  while (!vm.getState().halted) vm.step();
-  assert.deepEqual(vm.getState().stdout, [9, 16]);
-  assert.throws(() => compile('READ DRUM 0, SCALAR', MEM_SIZE), /needs at least 8 cells/);
+test('v2 reads the drum only into a local array, and stops at the end of RAM', () => {
+  assert.throws(() => compile('DIM BIG(16)\nSUB LOAD(S, DST)\n  READ DRUM S, DST\nEND', MEM_SIZE), /DRUM destination 'DST' must be a local array of at least 8 cells/);
+  assert.throws(() => compile('READ DRUM 0, SCALAR', MEM_SIZE), /must be a local array of at least 8 cells/);
   const mem = new Int32Array(MEM_SIZE);
   mem[0] = encode(['DRUM_READ', MEM_SIZE - 3, 1, 0]);
   const edge = createVM(mem, drumLayout(1));

@@ -30,14 +30,7 @@ export const waitCycles = ({ io, cycles }) => {
 };
 
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
-export function encode([op, a, b, c]) {
-  const id = OPS.indexOf(op);
-  if (id < 0) throw new Error(`Unknown opcode: ${op}`);
-  if ([a, b, c].some((x) => !Number.isInteger(x) || x < 0 || x > 511)) {
-    throw new RangeError(`Operand out of 9-bit range (0..511): ${op} ${a} ${b} ${c}`);
-  }
-  return (id << 27) | (a << 18) | (b << 9) | c;
-}
+export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
 export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 18) & 511, (word >>> 9) & 511, word & 511];
 
 export function createVM(initMem, drum = []) {
@@ -115,7 +108,7 @@ export function createVM(initMem, drum = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { sector: MEM[b], addr: c ? MEM[at(a)] : a, done: 0 };
+      io = { sector: MEM[b], addr: a, done: 0 };
       ip = pc;
     } else if (op in ALU) {
       reads.push(at(b), at(c));

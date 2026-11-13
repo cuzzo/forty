@@ -201,8 +201,8 @@ function build(source, memSize, dataBase) {
         }
         const buf = eat();
         const v = getVar(buf);
-        if (!v.isRef && span(v.dims) < words) throw new SyntaxError(`${device} destination '${buf}' needs at least ${words} cells`);
-        emit(op, v.addr, sector, +v.isRef);
+        if (v.isRef || span(v.dims) < words) throw new SyntaxError(`${device} destination '${buf}' must be a local array of at least ${words} cells`);
+        emit(op, v.addr, sector, 0);
       } else if (tok === 'REWIND') {
         eat('REWIND');
         emit('REWIND', 0, 0, 0);

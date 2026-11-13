@@ -14,14 +14,7 @@ export const ALU = {
 const OPS = ['HALT', 'MOV', 'LOAD_IND', 'STORE_IND', 'PRINT', 'JMP', 'JAL', 'JMP_IND', 'JZ', ...Object.keys(ALU)];
 
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
-export function encode([op, a, b, c]) {
-  const id = OPS.indexOf(op);
-  if (id < 0) throw new Error(`Unknown opcode: ${op}`);
-  if ([a, b, c].some((x) => !Number.isInteger(x) || x < 0 || x > 511)) {
-    throw new RangeError(`Operand out of 9-bit range (0..511): ${op} ${a} ${b} ${c}`);
-  }
-  return (id << 27) | (a << 18) | (b << 9) | c;
-}
+export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
 export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 18) & 511, (word >>> 9) & 511, word & 511];
 
 export function createVM(initMem) {

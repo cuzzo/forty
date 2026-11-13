@@ -196,8 +196,8 @@ function build(source, memSize, dataBase) {
         eat(',');
         const buf = eat();
         const v = getVar(buf);
-        if (!v.isRef && span(v.dims) < SECTOR_WORDS) throw new SyntaxError(`DRUM destination '${buf}' needs at least ${SECTOR_WORDS} cells`);
-        emit('DRUM_READ', v.addr, sector, +v.isRef);
+        if (v.isRef || span(v.dims) < SECTOR_WORDS) throw new SyntaxError(`DRUM destination '${buf}' must be a local array of at least ${SECTOR_WORDS} cells`);
+        emit('DRUM_READ', v.addr, sector, 0);
       } else if (tok === 'PRINT') {
         eat('PRINT');
         emit('PRINT', valAddr(parseExpr()), 0, 0);

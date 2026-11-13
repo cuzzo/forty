@@ -92,14 +92,12 @@ export function effect(prog, state) {
   if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
   if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
   if (op === 'DRUM_READ') {
-    const dst = c ? M[a] : a;
     const wait = ioWait({ io: { kind: 'drum', sector: M[b], done: 0 }, cycles: state.cycles + 1 });
-    return `read drum sector ${val(b)} -> ${name(dst)}..${name(dst + SECTOR_WORDS - 1)}, waiting ${cyc(wait)} first`;
+    return `read drum sector ${val(b)} -> ${name(a)}..${name(a + SECTOR_WORDS - 1)}, waiting ${cyc(wait)} first`;
   }
   if (op === 'TAPE_READ') {
-    const dst = c ? M[a] : a;
     const wait = ioWait({ io: { kind: 'tape' }, tapePos: state.tapePos });
-    return `read tape record ${record + 1} -> ${name(dst)}..${name(dst + RECORD_WORDS - 1)}, waiting ${cyc(wait)} first`;
+    return `read tape record ${record + 1} -> ${name(a)}..${name(a + RECORD_WORDS - 1)}, waiting ${cyc(wait)} first`;
   }
   if (op === 'REWIND') {
     return state.tapePos ? `rewind the tape from record ${record + 1}: ${cyc(ioWait({ io: { kind: 'rewind' }, tapePos: state.tapePos }))}` : 'rewind: tape already at the start';
@@ -120,15 +118,9 @@ export function describe([op, a, b, c], cells) {
   if (op === 'JAL') return `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`;
   if (op === 'JMP_IND') return `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`;
   if (op === 'JZ') return `JZ (jump if zero): if ${m(b)} is 0, go to instruction ${a}; else go to the next one`;
-  if (op === 'TAPE_READ') {
-    const dst = c ? `the cell pointed to by ${m(a)}` : `${m(a)} onward`;
-    return `TAPE_READ (read tape): start the tape, then copy the next record's ${RECORD_WORDS} words into ${dst}`;
-  }
+  if (op === 'TAPE_READ') return `TAPE_READ (read tape): start the tape, then copy the next record's ${RECORD_WORDS} words into ${m(a)} onward`;
   if (op === 'REWIND') return 'REWIND: wind the tape back to the start';
-  if (op === 'DRUM_READ') {
-    const dst = c ? `the cell pointed to by ${m(a)}` : `${m(a)} onward`;
-    return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into ${dst}`;
-  }
+  if (op === 'DRUM_READ') return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into ${m(a)} onward`;
   return `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${ALU[op] && /[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
 }
 
