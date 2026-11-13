@@ -174,107 +174,121 @@ function build(source, memSize, dataBase) {
     return lhs;
   }
 
+  function parseDim() {
+    const { name, dims } = parseDecl();
+    if (sym[name]?.mode === 'IND') sym[name].dims = dims;
+    else sym[name] = { mode: 'DIR', addr: alloc(span(dims), 'bss', name), dims };
+  }
+
+  function parseEquiv() {
+    const { name, dims } = parseDecl();
+    eat('=');
+    sym[name] = { ...getVar(eat()), dims };
+  }
+
+  function parseRead() {
+    const device = eat();
+    if (device !== 'DRUM' && device !== 'TAPE') throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
+    let sector = 0;
+    if (device === 'DRUM') {
+      sector = valAddr(parseExpr());
+      eat(',');
+    }
+    emit(`${device}_READ`, ptrAddr(parseLValue()), sector, 0);
+  }
+
+  function parseRewind() {
+    emit('REWIND', 0, 0, 0);
+  }
+
+  function parsePrint() {
+    emit('PRINT', valAddr(parseExpr()), 0, 0);
+  }
+
+  function parseIf() {
+    const cond = valAddr(parseExpr());
+    eat('THEN');
+    const jzIdx = emit('JZ', 0, cond, 0);
+    parseBlock();
+    if (peek() === 'ELSE') {
+      eat('ELSE');
+      const jmpIdx = emit('JMP', 0, 0, 0);
+      patch(jzIdx, ['JZ', code.length, cond, 0]);
+      parseBlock();
+      patch(jmpIdx, ['JMP', code.length, 0, 0]);
+    } else {
+      patch(jzIdx, ['JZ', code.length, cond, 0]);
+    }
+    eat('END');
+  }
+
+  function parseDo() {
+    const v = parseLValue();
+    eat('=');
+    const start = valAddr(parseExpr());
+    eat(',');
+    const stop = valAddr(parseExpr());
+    store(v, start);
+    const loopTop = code.length;
+    const cmpTmp = alloc(1);
+    emit('<=', cmpTmp, valAddr(v), stop);
+    const exitIdx = emit('JZ', 0, cmpTmp, 0);
+    parseBlock();
+    eat('END');
+    const next = valAddr(v);
+    emit('+', next, next, defConst(1));
+    store(v, next);
+    emit('JMP', loopTop, 0, 0);
+    patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
+  }
+
+  function parseSub() {
+    const name = eat();
+    eat('(');
+    const savedSym = sym;
+    sym = Object.create(null);
+    const params = [];
+    while (peek() !== ')') {
+      const p = eat();
+      const pAddr = alloc(1, 'linkage', `${name}.${p}`);
+      sym[p] = { mode: 'IND', addr: pAddr, dims: null };
+      params.push(pAddr);
+      if (peek() === ',') eat(',');
+    }
+    eat(')');
+    const retSlot = alloc(1, 'linkage', `${name}.ret`);
+    const skipIdx = emit('JMP', 0, 0, 0);
+    subs[name] = { entryIp: code.length, retSlot, params };
+    parseBlock();
+    eat('END');
+    sym = savedSym;
+    emit('JMP_IND', retSlot, 0, 0);
+    patch(skipIdx, ['JMP', code.length, 0, 0]);
+  }
+
+  function parseCall() {
+    const name = eat();
+    eat('(');
+    const sub = subs[name];
+    for (let i = 0; i < sub.params.length; i++) {
+      if (i > 0) eat(',');
+      touch(sub.params[i]);
+      emit('MOV', sub.params[i], ptrAddr(parseExpr()), 0);
+    }
+    eat(')');
+    touch(sub.retSlot);
+    emit('JAL', sub.retSlot, sub.entryIp, 0);
+  }
+
+  const STATEMENTS = { __proto__: null, DIM: parseDim, EQUIV: parseEquiv, READ: parseRead, REWIND: parseRewind, PRINT: parsePrint, IF: parseIf, DO: parseDo, SUB: parseSub, CALL: parseCall };
+
   function parseBlock() {
     while (peek() !== 'END' && peek() !== 'ELSE' && peek() !== END) {
       line = tokens[pos].line;
-      const tok = peek();
-      if (tok === 'DIM') {
-        eat('DIM');
-        const { name, dims } = parseDecl();
-        if (sym[name]?.mode === 'IND') sym[name].dims = dims;
-        else sym[name] = { mode: 'DIR', addr: alloc(span(dims), 'bss', name), dims };
-      } else if (tok === 'EQUIV') {
-        eat('EQUIV');
-        const { name, dims } = parseDecl();
-        eat('=');
-        sym[name] = { ...getVar(eat()), dims };
-      } else if (tok === 'READ') {
-        eat('READ');
-        const device = eat();
-        if (device !== 'DRUM' && device !== 'TAPE') throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
-        let sector = 0;
-        if (device === 'DRUM') {
-          sector = valAddr(parseExpr());
-          eat(',');
-        }
-        emit(`${device}_READ`, ptrAddr(parseLValue()), sector, 0);
-      } else if (tok === 'REWIND') {
-        eat('REWIND');
-        emit('REWIND', 0, 0, 0);
-      } else if (tok === 'PRINT') {
-        eat('PRINT');
-        emit('PRINT', valAddr(parseExpr()), 0, 0);
-      } else if (tok === 'IF') {
-        eat('IF');
-        const cond = valAddr(parseExpr());
-        eat('THEN');
-        const jzIdx = emit('JZ', 0, cond, 0);
-        parseBlock();
-        if (peek() === 'ELSE') {
-          eat('ELSE');
-          const jmpIdx = emit('JMP', 0, 0, 0);
-          patch(jzIdx, ['JZ', code.length, cond, 0]);
-          parseBlock();
-          patch(jmpIdx, ['JMP', code.length, 0, 0]);
-        } else {
-          patch(jzIdx, ['JZ', code.length, cond, 0]);
-        }
-        eat('END');
-      } else if (tok === 'DO') {
-        eat('DO');
-        const v = parseLValue();
-        eat('=');
-        const start = valAddr(parseExpr());
-        eat(',');
-        const stop = valAddr(parseExpr());
-        store(v, start);
-        const loopTop = code.length;
-        const cmpTmp = alloc(1);
-        emit('<=', cmpTmp, valAddr(v), stop);
-        const exitIdx = emit('JZ', 0, cmpTmp, 0);
-        parseBlock();
-        eat('END');
-        const next = valAddr(v);
-        emit('+', next, next, defConst(1));
-        store(v, next);
-        emit('JMP', loopTop, 0, 0);
-        patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
-      } else if (tok === 'SUB') {
-        eat('SUB');
-        const name = eat();
-        eat('(');
-        const savedSym = sym;
-        sym = Object.create(null);
-        const params = [];
-        while (peek() !== ')') {
-          const p = eat();
-          const pAddr = alloc(1, 'linkage', `${name}.${p}`);
-          sym[p] = { mode: 'IND', addr: pAddr, dims: null };
-          params.push(pAddr);
-          if (peek() === ',') eat(',');
-        }
-        eat(')');
-        const retSlot = alloc(1, 'linkage', `${name}.ret`);
-        const skipIdx = emit('JMP', 0, 0, 0);
-        subs[name] = { entryIp: code.length, retSlot, params };
-        parseBlock();
-        eat('END');
-        sym = savedSym;
-        emit('JMP_IND', retSlot, 0, 0);
-        patch(skipIdx, ['JMP', code.length, 0, 0]);
-      } else if (tok === 'CALL') {
-        eat('CALL');
-        const name = eat();
-        eat('(');
-        const sub = subs[name];
-        for (let i = 0; i < sub.params.length; i++) {
-          if (i > 0) eat(',');
-          touch(sub.params[i]);
-          emit('MOV', sub.params[i], ptrAddr(parseExpr()), 0);
-        }
-        eat(')');
-        touch(sub.retSlot);
-        emit('JAL', sub.retSlot, sub.entryIp, 0);
+      const statement = STATEMENTS[peek()];
+      if (statement) {
+        eat();
+        statement();
       } else {
         const lhs = parseLValue();
         eat('=');
