@@ -200,19 +200,23 @@ export function mount() {
     }
     linesBox.scrollTop = srcBox.scrollTop;
 
-    ramBox.replaceChildren();
     const code = view ? view.code : Array.from({ length: prog.codeLen }, (_, i) => decode(s.MEM[i]));
+    const codeCells = [];
+    const dataCells = [];
     for (let i = 0; i < prog.initMem.length; i++) {
       const isCode = i < prog.codeLen;
+      const into = isCode ? codeCells : dataCells;
       const placed = isCode ? code[i] !== undefined : i < (view ? view.cells : prog.usedCells);
       if (!placed) {
-        ramBox.append(el('div', { class: 'cell unused' }, el('small', { text: `[${i}]` }), el('strong', { text: ' ' })));
+        into.push(isCode
+          ? el('div', { class: 'cell code unused' }, el('small', { text: String(i).padStart(2, '0') }))
+          : el('div', { class: 'cell unused' }, el('small', { text: `[${i}]` }), el('strong', { text: ' ' })));
         continue;
       }
       const cell = prog.cells[i];
       const fresh = view && (view.newCell !== null ? i >= view.newCell : i === view.newIp);
       const flash = writes.has(i) || fresh ? ' write' : (reads.has(i) ? ' read' : '');
-      ramBox.append(el('div', {
+      into.push(el('div', {
         class: `cell ${cell.role}${flash}${isCode && i === activeIp ? ' pc' : ''}`,
         title: isCode ? describe(code[i], prog.cells) : '',
         onMouseenter: () => (isCode
@@ -225,6 +229,7 @@ export function mount() {
           : [el('small', { text: `[${i}] ${cell.label}` }), el('strong', { text: String(view ? prog.initMem[i] : s.MEM[i]) })]),
       ));
     }
+    ramBox.replaceChildren(el('div', { class: 'code-strip' }, ...codeCells), el('div', { class: 'data-grid' }, ...dataCells));
 
     codeBox.replaceChildren();
     code.forEach((instr, i) => {
