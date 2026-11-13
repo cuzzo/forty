@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { createVM } from './vm.js';
-import { DEMOS } from './visualizer.js';
+import { DEMOS, marks } from './visualizer.js';
 
 function run(source) {
   const { code, initMem } = compile(source, 64);
@@ -36,4 +36,22 @@ test('v0 runs Demos 1-4, records ipMap, and supports stepBack/reset', () => {
   vm.reset();
   assert.equal(vm.getState().pc, null);
   assert.equal(vm.getState().ip, 0);
+});
+
+test('v0 highlights the line executed last and points to the line executed next', () => {
+  const { code, initMem, ipMap } = compile(DEMOS.factorial.code, 64);
+  const vm = createVM(code, initMem);
+  assert.deepEqual(marks(ipMap, vm.getState()), { lastIp: null, nextIp: 0, lastLine: null, nextLine: 1 });
+  vm.step();
+  const one = marks(ipMap, vm.getState());
+  assert.equal(one.lastLine, 1);
+  assert.equal(one.nextLine, ipMap[one.nextIp]);
+  while (!vm.getState().halted) {
+    const before = marks(ipMap, vm.getState());
+    vm.step();
+    assert.equal(marks(ipMap, vm.getState()).lastIp, before.nextIp);
+  }
+  const end = marks(ipMap, vm.getState());
+  assert.equal(end.nextLine, null);
+  assert.equal(end.lastLine, 6);
 });

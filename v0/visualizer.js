@@ -20,6 +20,18 @@ export const DEMOS = {
   },
 };
 
+// The instruction (and its source line) executed last, and the one executed next.
+export function marks(ipMap, state, focusIp = null) {
+  const lastIp = focusIp ?? state.pc;
+  const nextIp = state.halted ? null : state.ip;
+  return {
+    lastIp,
+    nextIp,
+    lastLine: lastIp === null ? null : ipMap[lastIp],
+    nextLine: nextIp === null ? null : ipMap[nextIp],
+  };
+}
+
 function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -96,9 +108,7 @@ export function mount() {
 
   function render(focusIp = null) {
     const s = vm.getState();
-    const activeIp = focusIp ?? s.pc;
-    const nextIp = s.halted ? null : s.ip;
-    const activeLine = activeIp !== null ? prog.ipMap[activeIp] : null;
+    const { lastIp: activeIp, nextIp, lastLine: activeLine, nextLine } = marks(prog.ipMap, s, focusIp);
     const reads = new Set(last.reads);
     const writes = new Set(last.writes);
 
@@ -109,16 +119,19 @@ export function mount() {
     srcBox.value.split('\n').forEach((text, idx) => {
       const ln = idx + 1;
       const active = ln === activeLine;
+      const isNext = ln === nextLine;
       const row = el('div', {
-        class: `line${active ? ' active' : ''}`,
-        text: `${active ? '>' : ' '} ${String(ln).padStart(2, '0')} ${text}`,
+        class: `line${active ? ' active' : ''}${isNext ? ' next' : ''}`,
         onClick: () => {
           const ip = prog.ipMap.indexOf(ln);
           if (ip >= 0) render(ip);
         },
-      });
+      },
+      el('span', { text: `${isNext ? '>' : ' '} ${String(ln).padStart(2, '0')} ${text}` }),
+      ...(isNext ? [el('span', { class: 'next-tag', text: 'next' })] : []),
+      );
       linesBox.append(row);
-      if (active) row.scrollIntoView({ block: 'nearest' });
+      if (isNext || (nextLine === null && active)) row.scrollIntoView({ block: 'nearest' });
     });
 
     ramBox.replaceChildren();
@@ -139,11 +152,11 @@ export function mount() {
         class: `line${active ? ' active' : ''}${isNext ? ' next' : ''}`,
         onClick: () => render(i),
       },
-      el('span', { text: `${active ? '>' : ' '} ${String(i).padStart(2, '0')}: ${instr.join(' ')}` }),
+      el('span', { text: `${isNext ? '>' : ' '} ${String(i).padStart(2, '0')}: ${instr.join(' ')}` }),
       ...(isNext ? [el('span', { class: 'next-tag', text: 'next' })] : []),
       );
       codeBox.append(row);
-      if (active || (activeIp === null && isNext)) row.scrollIntoView({ block: 'nearest' });
+      if (isNext || (nextIp === null && active)) row.scrollIntoView({ block: 'nearest' });
     });
 
     requestAnimationFrame(drawArrow);
