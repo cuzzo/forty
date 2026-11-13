@@ -90,7 +90,7 @@ export function createVM(initMem, drum = [], tape = []) {
       return view();
     }
     const addr = io.addr + io.done;
-    MEM[addr] = io.kind === 'tape'
+    MEM[at(addr)] = io.kind === 'tape'
       ? TAPE[record * RECORD_WORDS + io.done]
       : DRUM[io.sector * SECTOR_WORDS + io.done];
     io = { ...io, done: io.done + 1 };
@@ -103,12 +103,8 @@ export function createVM(initMem, drum = [], tape = []) {
     return i;
   };
 
-  function step() {
-    if (halted || (!io && ip === MEM.length)) {
-      halted = true;
-      return view();
-    }
-    if (!io && (ip < 0 || ip > MEM.length)) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
+  function exec() {
+    if (halted) return view();
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length, cycles, waited, tapePos, io });
     if (io) return ioCycle();
     pc = ip;
@@ -148,21 +144,11 @@ export function createVM(initMem, drum = [], tape = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      const target = c ? MEM[at(a)] : a;
-      if (c) reads.push(a);
-      if (target < 0 || target + SECTOR_WORDS > MEM.length) {
-        throw new RangeError(`Drum destination out of bounds: ${target}..${target + SECTOR_WORDS - 1}`);
-      }
-      io = { kind: 'drum', sector: MEM[b], addr: target, done: 0 };
+      io = { kind: 'drum', sector: MEM[b], addr: c ? MEM[at(a)] : a, done: 0 };
       ip = pc;
     } else if (op === 'TAPE_READ') {
       if (tapePos >= RECORDS * RECORD_SPAN) throw new Error('End of tape');
-      const target = c ? MEM[at(a)] : a;
-      if (c) reads.push(a);
-      if (target < 0 || target + RECORD_WORDS > MEM.length) {
-        throw new RangeError(`Tape destination out of bounds: ${target}..${target + RECORD_WORDS - 1}`);
-      }
-      io = { kind: 'tape', addr: target, done: 0 };
+      io = { kind: 'tape', addr: c ? MEM[at(a)] : a, done: 0 };
       ip = pc;
     } else if (op === 'REWIND') {
       if (tapePos) {
@@ -181,6 +167,16 @@ export function createVM(initMem, drum = [], tape = []) {
     if (ip < 0 || ip > MEM.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
     if (ip === MEM.length) halted = true;
     return view(reads, writes);
+  }
+
+  // A step that faults leaves the machine as it was.
+  function step() {
+    try {
+      return exec();
+    } catch (e) {
+      stepBack();
+      throw e;
+    }
   }
 
   function stepBack() {

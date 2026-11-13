@@ -37,12 +37,8 @@ export function createVM(initMem) {
     return i;
   };
 
-  function step() {
-    if (halted || ip === MEM.length) {
-      halted = true;
-      return { pc, ip, halted, MEM, stdout, reads: [], writes: [] };
-    }
-    if (ip < 0 || ip > MEM.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
+  function exec() {
+    if (halted) return { pc, ip, halted, MEM, stdout, reads: [], writes: [] };
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length });
     pc = ip;
     const [op, a, b, c] = decode(MEM[ip++]);
@@ -89,6 +85,16 @@ export function createVM(initMem) {
     if (ip < 0 || ip > MEM.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
     if (ip === MEM.length) halted = true;
     return { pc, ip, halted, MEM, stdout, reads, writes };
+  }
+
+  // A step that faults leaves the machine as it was.
+  function step() {
+    try {
+      return exec();
+    } catch (e) {
+      stepBack();
+      throw e;
+    }
   }
 
   function stepBack() {

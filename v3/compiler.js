@@ -18,15 +18,14 @@ export function tokenize(source) {
 
 // Code fills MEM[0..] one instruction per cell, so data starts where the code ends.
 export function compile(source, memSize = 256) {
-  return build(source, memSize, build(source, null, 0).codeLen);
+  return build(source, memSize, build(source, memSize, 0).codeLen);
 }
 
 function build(source, memSize, dataBase) {
-  const sizing = memSize === null;
   const tokens = tokenize(source);
-  const initMem = sizing ? [] : new Int32Array(memSize);
-  const cells = sizing ? [] : Array.from({ length: memSize }, () => ({ role: 'unused', label: '' }));
-  const refs = sizing ? [] : Array.from({ length: memSize }, () => new Set());
+  const initMem = new Int32Array(memSize);
+  const cells = Array.from({ length: memSize }, () => ({ role: 'unused', label: '' }));
+  const refs = Array.from({ length: memSize }, () => new Set());
   const consts = new Map();
   const subs = Object.create(null);
   const code = [];
@@ -40,23 +39,18 @@ function build(source, memSize, dataBase) {
   const scoped = (name) => (currentSub ? `${currentSub}.${name}` : name);
 
   function touch(addr, size = 1) {
-    if (sizing) return;
     for (let i = 0; i < size; i++) refs[addr + i].add(line);
   }
 
   function alloc(size = 1, role = 'scratch', label = '') {
-    if (!sizing && nextMem + size > memSize) {
-      throw new Error(`Program does not fit: ${dataBase} cells of code + data exceed ${memSize} cells of RAM`);
-    }
+    if (nextMem + size > memSize) throw new Error(`Program does not fit in ${memSize} cells of RAM`);
     const base = nextMem;
     nextMem += size;
-    if (!sizing) {
-      for (let i = 0; i < size; i++) {
-        cells[base + i] = { role, label: size > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
-      }
-      touch(base, size);
-      events.push({ kind: 'alloc', base, size, line });
+    for (let i = 0; i < size; i++) {
+      cells[base + i] = { role, label: size > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
     }
+    touch(base, size);
+    events.push({ kind: 'alloc', base, size, line });
     return base;
   }
 
@@ -192,34 +186,20 @@ function build(source, memSize, dataBase) {
         eat('=');
         const tName = eat();
         const target = sym[tName];
-        if (!target || target.isRef) throw new SyntaxError(`Invalid EQUIV target '${tName}'`);
-        const size = span(dims);
-        const end = target.addr + size;
-        if (!sizing && end > memSize) {
-          throw new Error(`Program does not fit: ${dataBase} cells of code + data exceed ${memSize} cells of RAM`);
-        }
-        if (end > nextMem) {
-          const prev = nextMem;
-          alloc(end - prev, 'bss', '');
-          if (!sizing) for (let a = prev; a < end; a++) cells[a].label = `${scoped(name)}[${a - target.addr}]`;
-        }
+        if (!target || target.isRef || span(dims) > span(target.dims)) throw new SyntaxError(`EQUIV '${name}' must fit inside '${tName}'`);
         sym[name] = { addr: target.addr, dims, isRef: false };
-        touch(target.addr, size);
+        touch(target.addr, span(dims));
       } else if (tok === 'READ') {
         eat('READ');
         const device = eat();
         if (device !== 'TAPE' && device !== 'DRUM') throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
         const sector = device === 'DRUM' ? valAddr(parseExpr()) : 0;
         if (device === 'DRUM') eat(',');
-        const bufTok = peek();
-        if (bufTok === null || !/^[A-Za-z_]/.test(bufTok)) throw new SyntaxError(`Expected identifier, got '${bufTok}'`);
-        const existing = sym[bufTok];
-        const lhs = parseLValue();
-        const minWords = device === 'TAPE' ? RECORD_WORDS : SECTOR_WORDS;
-        if (lhs.mode === 'DIR' && (!existing || span(sym[bufTok].dims) < minWords)) {
-          throw new SyntaxError(`${device} destination '${bufTok}' needs at least ${minWords} cells`);
-        }
-        emit(device === 'TAPE' ? 'TAPE_READ' : 'DRUM_READ', lhs.addr, sector, lhs.mode === 'IND' ? 1 : 0);
+        const words = device === 'TAPE' ? RECORD_WORDS : SECTOR_WORDS;
+        const buf = eat();
+        const v = getVar(buf);
+        if (!v.isRef && span(v.dims) < words) throw new SyntaxError(`${device} destination '${buf}' needs at least ${words} cells`);
+        emit(device === 'TAPE' ? 'TAPE_READ' : 'DRUM_READ', v.addr, sector, v.isRef ? 1 : 0);
       } else if (tok === 'REWIND') {
         eat('REWIND');
         emit('REWIND', 0, 0, 0);
@@ -244,26 +224,21 @@ function build(source, memSize, dataBase) {
         eat('END');
       } else if (tok === 'DO') {
         eat('DO');
-        const v = getVar(eat());
+        const name = eat();
+        const v = getVar(name);
+        if (v.isRef) throw new SyntaxError(`DO variable '${name}' cannot be a SUB argument`);
         eat('=');
         const start = valAddr(parseExpr());
         eat(',');
         const stop = valAddr(parseExpr());
-        emit(v.isRef ? 'STORE_IND' : 'MOV', v.addr, start, 0);
+        emit('MOV', v.addr, start, 0);
         const loopTop = code.length;
-        const cur = v.isRef ? valAddr({ mode: 'IND', addr: v.addr }) : v.addr;
         const cmpTmp = alloc(1);
-        emit('<=', cmpTmp, cur, stop);
+        emit('<=', cmpTmp, v.addr, stop);
         const exitIdx = emit('JZ', 0, cmpTmp, 0);
         parseBlock();
         eat('END');
-        if (v.isRef) {
-          const nxt = valAddr({ mode: 'IND', addr: v.addr });
-          emit('+', nxt, nxt, defConst(1));
-          emit('STORE_IND', v.addr, nxt, 0);
-        } else {
-          emit('+', v.addr, v.addr, defConst(1));
-        }
+        emit('+', v.addr, v.addr, defConst(1));
         emit('JMP', loopTop, 0, 0);
         patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
       } else if (tok === 'SUB') {
@@ -318,10 +293,6 @@ function build(source, memSize, dataBase) {
   parseBlock();
   if (pos < tokens.length) throw new SyntaxError(`Unexpected '${tokens[pos].text}' at line ${tokens[pos].line}`);
   emit('HALT', 0, 0, 0);
-  if (sizing) return { codeLen: code.length };
-  if (nextMem > memSize) {
-    throw new Error(`Program does not fit: ${code.length} cells of code + data exceed ${memSize} cells of RAM`);
-  }
   code.forEach((instr, ip) => {
     cells[ip] = { role: 'code', label: instr.join(' ') };
     initMem[ip] = encode(instr);

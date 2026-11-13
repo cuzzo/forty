@@ -168,17 +168,9 @@ export function compile(source, memSize = 256) {
         eat('=');
         const tName = eat();
         const target = sym[tName];
-        if (!target || target.isRef) throw new SyntaxError(`Invalid EQUIV target '${tName}'`);
-        const size = span(dims);
-        const end = target.addr + size;
-        if (end > memSize) throw new Error(`RAM overflow (${memSize} cells)`);
-        if (end > nextMem) {
-          const prev = nextMem;
-          alloc(end - prev, 'bss', '');
-          for (let a = prev; a < end; a++) cells[a].label = `${scoped(name)}[${a - target.addr}]`;
-        }
+        if (!target || target.isRef || span(dims) > span(target.dims)) throw new SyntaxError(`EQUIV '${name}' must fit inside '${tName}'`);
         sym[name] = { addr: target.addr, dims, isRef: false };
-        touch(target.addr, size);
+        touch(target.addr, span(dims));
       } else if (tok === 'PRINT') {
         eat('PRINT');
         emit('PRINT', valAddr(parseExpr()), 0, 0);
@@ -200,26 +192,21 @@ export function compile(source, memSize = 256) {
         eat('END');
       } else if (tok === 'DO') {
         eat('DO');
-        const v = getVar(eat());
+        const name = eat();
+        const v = getVar(name);
+        if (v.isRef) throw new SyntaxError(`DO variable '${name}' cannot be a SUB argument`);
         eat('=');
         const start = valAddr(parseExpr());
         eat(',');
         const stop = valAddr(parseExpr());
-        emit(v.isRef ? 'STORE_IND' : 'MOV', v.addr, start, 0);
+        emit('MOV', v.addr, start, 0);
         const loopTop = code.length;
-        const cur = v.isRef ? valAddr({ mode: 'IND', addr: v.addr }) : v.addr;
         const cmpTmp = alloc(1);
-        emit('<=', cmpTmp, cur, stop);
+        emit('<=', cmpTmp, v.addr, stop);
         const exitIdx = emit('JZ', 0, cmpTmp, 0);
         parseBlock();
         eat('END');
-        if (v.isRef) {
-          const nxt = valAddr({ mode: 'IND', addr: v.addr });
-          emit('+', nxt, nxt, defConst(1));
-          emit('STORE_IND', v.addr, nxt, 0);
-        } else {
-          emit('+', v.addr, v.addr, defConst(1));
-        }
+        emit('+', v.addr, v.addr, defConst(1));
         emit('JMP', loopTop, 0, 0);
         patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
       } else if (tok === 'SUB') {

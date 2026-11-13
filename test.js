@@ -149,33 +149,12 @@ test('WHILE loops and hardware bounds traps work across VM and RISC-V', () => {
   assert.equal(badMem.rvState.trap?.code, 'TRAP_OOB_MEM');
 });
 
-test('SUB isolates local scope, dimensions 2D ref params, and EQUIV reserves tail cells', () => {
-  const src = [
-    'I = 77',
-    'DIM G(2, 2)',
-    'SUB FILL(M, K)',
-    '  DIM M(2, 2)',
-    '  DO I = 0, 1',
-    '    M[I, 1] = (I + 1) * 10',
-    '  END',
-    '  DO K = 1, 3',
-    '    M[0, 0] = M[0, 0] + K',
-    '  END',
-    'END',
-    'OUT = 0',
-    'CALL FILL(G, OUT)',
-    'PRINT I',
-    'PRINT G[0, 0]',
-    'PRINT G[1, 1]',
-    'PRINT OUT',
-    'DIM SMALL(2)',
-    'EQUIV BIG(5) = SMALL',
-    'AFTER = 99',
-    'BIG[4] = 42',
-    'PRINT AFTER',
-    'PRINT BIG[4]',
-  ].join('\n');
+test('SUB isolates local scope, indexes a 2D SUB argument, and rejects DO over an argument and an oversized EQUIV', () => {
+  const src = ['I = 77', 'DIM G(2, 2)', 'SUB FILL(M)', '  DIM M(2, 2)', '  DO I = 0, 1', '    M[I, 1] = (I + 1) * 10', '  END', 'END', 'CALL FILL(G)', 'PRINT I', 'PRINT G[1, 1]'].join('\n');
   const { vmState, rvState } = runBoth(src, { memSize: 64 });
-  assert.deepEqual(vmState.stdout, [77, 6, 20, 4, 99, 42]);
-  assert.deepEqual(rvState.stdout, [77, 6, 20, 4, 99, 42]);
+  assert.deepEqual(vmState.stdout, [77, 20]);
+  assert.deepEqual(rvState.stdout, [77, 20]);
+  assert.throws(() => compile('SUB S(K)\n  DO K = 1, 3\n  END\nEND'), /DO variable 'K' cannot be a SUB argument/);
+  assert.throws(() => compile('DIM SMALL(2)\nEQUIV BIG(5) = SMALL'), /EQUIV 'BIG' must fit inside 'SMALL'/);
+  assert.throws(() => compile('EQUIV A(2) = MISSING'), /EQUIV 'A' must fit inside 'MISSING'/);
 });

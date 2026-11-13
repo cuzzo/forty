@@ -132,7 +132,7 @@ test('v1 stores the program in memory ahead of its data', () => {
     assert.ok(prog.cells.slice(prog.codeLen, prog.usedCells).every((cell) => cell.role !== 'code' && cell.role !== 'unused'));
     assert.ok(prog.cells.slice(prog.usedCells).every((cell) => cell.role === 'unused'));
   }
-  assert.throws(() => compile(DEMOS.saxpy.code, 64), /Program does not fit: 60 cells of code \+ data exceed 64 cells of RAM/);
+  assert.throws(() => compile(DEMOS.saxpy.code, 64), /Program does not fit in 64 cells of RAM/);
   assert.equal(decode(0)[0], 'HALT');
   assert.match(decode(31 << 27)[0], /^\?31$/);
 });
@@ -147,46 +147,31 @@ test('v1 executes whatever is in memory, so overwriting code changes the program
   assert.throws(() => { const bad = createVM([31 << 27]); bad.step(); }, /Unknown opcode: \?31/);
 });
 
-test('v1 isolates SUB scope, extends EQUIV, and guards stored-program bounds', () => {
-  const src = [
-    'I = 77',
-    'DIM G(2, 2)',
-    'SUB FILL(M, K)',
-    '  DIM M(2, 2)',
-    '  DO I = 0, 1',
-    '    M[I, 1] = (I + 1) * 10',
-    '  END',
-    '  DO K = 1, 3',
-    '    M[0, 0] = M[0, 0] + K',
-    '  END',
-    'END',
-    'OUT = 0',
-    'CALL FILL(G, OUT)',
-    'DIM SMALL(2)',
-    'EQUIV BIG(5) = SMALL',
-    'AFTER = 99',
-    'BIG[4] = 42',
-    'PRINT I',
-    'PRINT G[0, 0]',
-    'PRINT G[1, 1]',
-    'PRINT OUT',
-    'PRINT AFTER',
-    'PRINT BIG[4]',
-  ].join('\n');
-  assert.deepEqual(run(src).getState().stdout, [77, 6, 20, 4, 99, 42]);
+test('v1 scopes SUB locals, indexes a 2D SUB argument, and rejects what it cannot compile', () => {
+  const src = ['I = 77', 'DIM G(2, 2)', 'SUB FILL(M)', '  DIM M(2, 2)', '  DO I = 0, 1', '    M[I, 1] = (I + 1) * 10', '  END', 'END', 'CALL FILL(G)', 'PRINT I', 'PRINT G[1, 1]'].join('\n');
+  assert.deepEqual(run(src).getState().stdout, [77, 20]);
+  for (const [bad, message] of [
+    ['X = 3.14', /Unexpected character '\.'/],
+    ['X = 1\nEND\nPRINT X', /Unexpected 'END'/],
+    ['X = 1\nELSE\nX = 2', /Unexpected 'ELSE'/],
+    ['CALL NOPE()', /Undefined subroutine 'NOPE'/],
+    ['X = 1\nY = X[0, 0]', /2D index on non-2D variable 'X'/],
+    ['SUB S(K)\n  DO K = 1, 3\n  END\nEND', /DO variable 'K' cannot be a SUB argument/],
+    ['DIM SMALL(2)\nEQUIV BIG(5) = SMALL', /EQUIV 'BIG' must fit inside 'SMALL'/],
+    ['EQUIV A(2) = MISSING', /EQUIV 'A' must fit inside 'MISSING'/],
+  ]) assert.throws(() => compile(bad, MEM_SIZE), message);
+});
 
-  assert.throws(() => compile('X = 3.14', MEM_SIZE), /Unexpected character '\.'/);
-  assert.throws(() => compile('X = 1\nEND\nPRINT X', MEM_SIZE), /Unexpected 'END'/);
-  assert.throws(() => compile('DIM A(200)', 128), /Program does not fit: 1 cells of code \+ data exceed 128 cells of RAM/);
-  assert.throws(() => compile('', 0), /Program does not fit: 1 cells of code \+ data exceed 0 cells of RAM/);
+test('v1 undoes a step that faults, so stepping again faults again', () => {
+  const vm = ((src) => createVM(compile(src, MEM_SIZE).initMem))('X = 0\nY = 5 / X\nPRINT 7');
+  vm.step();
+  const at = [vm.getState().ip, vm.getState().steps];
+  assert.throws(() => vm.step(), /Division by zero/);
+  assert.deepEqual([vm.getState().ip, vm.getState().steps], at);
+  assert.throws(() => vm.step(), /Division by zero/);
+  assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
+  assert.throws(() => createVM([encode(['JMP_IND', 1, 0, 0]), -1]).step(), /Instruction pointer out of bounds/);
   assert.throws(() => encode(['BOGUS', 0, 0, 0]), /Unknown opcode: BOGUS/);
   assert.throws(() => encode(['MOV', 512, 0, 0]), /Operand out of 9-bit range/);
-  assert.throws(() => encode(['MOV', -1, 0, 0]), /Operand out of 9-bit range/);
-  assert.throws(() => run('X = 1 / 0'), /Division by zero/);
-  assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
-  const negJmp = createVM([encode(['JMP_IND', 1, 0, 0]), -1]);
-  assert.throws(() => negJmp.step(), /Instruction pointer out of bounds/);
-  const badWordProg = compile('X = 1', MEM_SIZE);
-  const badWordVm = createVM([31 << 27]);
-  assert.equal(effect(badWordProg, badWordVm.getState()), 'unknown opcode ?31');
+  assert.equal(effect(compile('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
 });

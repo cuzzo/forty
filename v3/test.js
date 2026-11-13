@@ -132,7 +132,7 @@ test('v3 stores the program in memory ahead of its data', () => {
     assert.ok(prog.cells.slice(prog.codeLen, prog.usedCells).every((cell) => cell.role !== 'code' && cell.role !== 'unused'));
     assert.ok(prog.cells.slice(prog.usedCells).every((cell) => cell.role === 'unused'));
   }
-  assert.throws(() => compile(DEMOS.saxpy.code, 64), /Program does not fit: 60 cells of code \+ data exceed 64 cells of RAM/);
+  assert.throws(() => compile(DEMOS.saxpy.code, 64), /Program does not fit in 64 cells of RAM/);
   assert.equal(decode(0)[0], 'HALT');
   assert.match(decode(31 << 27)[0], /^\?31$/);
 });
@@ -253,50 +253,54 @@ test('v3 stops at the end of the tape and rejects an unknown device', () => {
   assert.throws(() => compile('DIM R(8)\nREAD DISK R', MEM_SIZE), /Expected DRUM or TAPE, got 'DISK'/);
 });
 
-test('v3 supports indirect READ TAPE/DRUM, isolates SUB scope, and checks bounds', () => {
-  const src = [
-    'I = 44',
-    'DIM BIG(16)',
-    'SUB PULL(DST, K)',
-    '  DIM DST(4, 2)',
-    '  DO K = 0, 0',
-    '    READ TAPE DST',
-    '  END',
-    '  DO I = 0, 1',
-    '    DST[I, 1] = DST[I, 1] + 10',
-    '  END',
-    'END',
-    'STEP = 0',
-    'CALL PULL(BIG, STEP)',
-    'READ DRUM 1, BIG[8]',
-    'DIM SMALL(2)',
-    'EQUIV OVER(5) = SMALL',
-    'KEEP = 77',
-    'OVER[4] = 33',
-    'PRINT I',
-    'PRINT STEP',
-    'PRINT BIG[0]',
-    'PRINT BIG[4]',
-    'PRINT BIG[15]',
-    'PRINT KEEP',
-    'PRINT OVER[4]',
-  ].join('\n');
-  const prog = compile(src, MEM_SIZE);
-  const indTape = prog.code.find((instr) => instr[0] === 'TAPE_READ' && instr[3] === 1);
-  assert.match(describe(indTape, prog.cells), /into the cell pointed to by/);
-  const vm = createVM(prog.initMem, drumLayout(1), TAPE_DATA);
-  const effects = [];
-  while (!vm.getState().halted) {
-    effects.push(effect(prog, vm.getState()));
-    vm.step();
-  }
-  assert.ok(effects.some((e) => e.startsWith('read tape record')));
-  assert.deepEqual(vm.getState().stdout, [44, 1, 1, 15, 16, 77, 33]);
-  assert.equal(effect(prog, createVM([31 << 27]).getState()), 'unknown opcode ?31');
+test('v3 scopes SUB locals, indexes a 2D SUB argument, and rejects what it cannot compile', () => {
+  const src = ['I = 77', 'DIM G(2, 2)', 'SUB FILL(M)', '  DIM M(2, 2)', '  DO I = 0, 1', '    M[I, 1] = (I + 1) * 10', '  END', 'END', 'CALL FILL(G)', 'PRINT I', 'PRINT G[1, 1]'].join('\n');
+  assert.deepEqual(run(src).getState().stdout, [77, 20]);
+  for (const [bad, message] of [
+    ['X = 3.14', /Unexpected character '\.'/],
+    ['X = 1\nEND\nPRINT X', /Unexpected 'END'/],
+    ['X = 1\nELSE\nX = 2', /Unexpected 'ELSE'/],
+    ['CALL NOPE()', /Undefined subroutine 'NOPE'/],
+    ['X = 1\nY = X[0, 0]', /2D index on non-2D variable 'X'/],
+    ['SUB S(K)\n  DO K = 1, 3\n  END\nEND', /DO variable 'K' cannot be a SUB argument/],
+    ['DIM SMALL(2)\nEQUIV BIG(5) = SMALL', /EQUIV 'BIG' must fit inside 'SMALL'/],
+    ['EQUIV A(2) = MISSING', /EQUIV 'A' must fit inside 'MISSING'/],
+  ]) assert.throws(() => compile(bad, MEM_SIZE), message);
+});
 
+test('v3 undoes a step that faults, so stepping again faults again', () => {
+  const vm = ((src) => createVM(compile(src, MEM_SIZE).initMem))('X = 0\nY = 5 / X\nPRINT 7');
+  vm.step();
+  const at = [vm.getState().ip, vm.getState().steps];
+  assert.throws(() => vm.step(), /Division by zero/);
+  assert.deepEqual([vm.getState().ip, vm.getState().steps], at);
+  assert.throws(() => vm.step(), /Division by zero/);
+  assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
+  assert.throws(() => createVM([encode(['JMP_IND', 1, 0, 0]), -1]).step(), /Instruction pointer out of bounds/);
+  assert.throws(() => encode(['BOGUS', 0, 0, 0]), /Unknown opcode: BOGUS/);
+  assert.throws(() => encode(['MOV', 512, 0, 0]), /Operand out of 9-bit range/);
+  assert.equal(effect(compile('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
+});
+
+test('v3 reads the drum into a SUB array argument through its pointer', () => {
+  const prog = compile('DIM BIG(16)\nSUB LOAD(S, DST)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', MEM_SIZE);
+  assert.match(describe(prog.code.find((instr) => instr[0] === 'DRUM_READ'), prog.cells), /into the cell pointed to by/);
+  const vm = createVM(prog.initMem, drumLayout(1));
+  while (!vm.getState().halted) vm.step();
+  assert.deepEqual(vm.getState().stdout, [9, 16]);
+  assert.throws(() => compile('READ DRUM 0, SCALAR', MEM_SIZE), /needs at least 8 cells/);
+  const mem = new Int32Array(MEM_SIZE);
+  mem[0] = encode(['DRUM_READ', MEM_SIZE - 3, 1, 0]);
+  const edge = createVM(mem, drumLayout(1));
+  assert.throws(() => { for (;;) edge.step(); }, new RegExp(`Memory address out of bounds: ${MEM_SIZE}`));
+  assert.equal(edge.getState().io.done, 3);
+});
+
+test('v3 reads the tape into a SUB array argument through its pointer', () => {
+  const prog = compile('DIM BIG(8)\nSUB PULL(DST)\n  READ TAPE DST\nEND\nCALL PULL(BIG)\nPRINT BIG[7]', MEM_SIZE);
+  assert.match(describe(prog.code.find((instr) => instr[0] === 'TAPE_READ'), prog.cells), /into the cell pointed to by/);
+  const vm = createVM(prog.initMem, [], TAPE_DATA);
+  while (!vm.getState().halted) vm.step();
+  assert.deepEqual(vm.getState().stdout, [8]);
   assert.throws(() => compile('READ TAPE SCALAR', MEM_SIZE), /needs at least 8 cells/);
-  assert.throws(() => encode(['TAPE_READ', 512, 0, 0]), /Operand out of 9-bit range/);
-  const oobTape = compile('DIM B(8)\nREAD TAPE B[125]', MEM_SIZE);
-  const oobVm = createVM(oobTape.initMem, [], TAPE_DATA);
-  assert.throws(() => { while (!oobVm.getState().halted) oobVm.step(); }, /Tape destination out of bounds/);
 });

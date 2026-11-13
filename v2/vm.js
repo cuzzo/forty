@@ -63,7 +63,7 @@ export function createVM(initMem, drum = []) {
       return view();
     }
     const addr = io.addr + io.done;
-    MEM[addr] = DRUM[io.sector * SECTOR_WORDS + io.done];
+    MEM[at(addr)] = DRUM[io.sector * SECTOR_WORDS + io.done];
     io = io.done + 1 === SECTOR_WORDS ? null : { ...io, done: io.done + 1 };
     if (!io) ip = pc + 1;
     return view([], [addr]);
@@ -74,12 +74,8 @@ export function createVM(initMem, drum = []) {
     return i;
   };
 
-  function step() {
-    if (halted || (!io && ip === MEM.length)) {
-      halted = true;
-      return view();
-    }
-    if (!io && (ip < 0 || ip > MEM.length)) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
+  function exec() {
+    if (halted) return view();
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length, cycles, waited, io });
     if (io) return drumCycle();
     pc = ip;
@@ -119,12 +115,7 @@ export function createVM(initMem, drum = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      const target = c ? MEM[at(a)] : a;
-      if (c) reads.push(a);
-      if (target < 0 || target + SECTOR_WORDS > MEM.length) {
-        throw new RangeError(`Drum destination out of bounds: ${target}..${target + SECTOR_WORDS - 1}`);
-      }
-      io = { sector: MEM[b], addr: target, done: 0 };
+      io = { sector: MEM[b], addr: c ? MEM[at(a)] : a, done: 0 };
       ip = pc;
     } else if (op in ALU) {
       reads.push(at(b), at(c));
@@ -138,6 +129,16 @@ export function createVM(initMem, drum = []) {
     if (ip < 0 || ip > MEM.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
     if (ip === MEM.length) halted = true;
     return view(reads, writes);
+  }
+
+  // A step that faults leaves the machine as it was.
+  function step() {
+    try {
+      return exec();
+    } catch (e) {
+      stepBack();
+      throw e;
+    }
   }
 
   function stepBack() {

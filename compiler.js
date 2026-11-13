@@ -41,6 +41,8 @@ function cellLabelFor(name, i, dims) {
   return `${name}[${i}]`;
 }
 
+const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
+
 export function compile(source, { memSize = 256 } = {}) {
   const tokens = tokenize(source);
   const lines = source.split('\n');
@@ -216,7 +218,7 @@ export function compile(source, { memSize = 256 } = {}) {
       sym[name].dims = dims;
       return;
     }
-    const size = dims ? dims[0] * (dims[1] ?? 1) : 1;
+    const size = span(dims);
     const label = currentSub ? `${currentSub}.${name}` : name;
     const addr = alloc(size, 'bss', label, label, dims);
     sym[name] = { addr, dims, isRef: false };
@@ -228,21 +230,12 @@ export function compile(source, { memSize = 256 } = {}) {
     eat('=');
     const targetName = eat();
     const target = sym[targetName];
-    if (!target) throw new SyntaxError(`Undefined symbol '${targetName}' in EQUIV (line ${currentLine})`);
-    if (target.isRef) throw new SyntaxError(`Cannot EQUIV onto reference parameter '${targetName}' (line ${currentLine})`);
-    const size = dims ? dims[0] * (dims[1] ?? 1) : 1;
-    const end = target.addr + size;
-    if (end > memSize) throw new Error(`Compile-time static RAM overflow (${memSize} cells)`);
-    const prevEnd = nextMem;
-    if (end > nextMem) {
-      const label = currentSub ? `${currentSub}.${name}` : name;
-      alloc(end - nextMem, 'bss', '', label, dims);
-      for (let addr = prevEnd; addr < end; addr++) {
-        cells[addr].label = cellLabelFor(label, addr - target.addr, dims);
-      }
+    const size = span(dims);
+    if (!target || target.isRef || size > span(target.dims)) {
+      throw new SyntaxError(`EQUIV '${name}' must fit inside '${targetName}' (line ${currentLine})`);
     }
     sym[name] = { addr: target.addr, dims, isRef: false };
-    for (let i = 0; i < size && target.addr + i < prevEnd; i++) {
+    for (let i = 0; i < size; i++) {
       cells[target.addr + i].aliases.push(cellLabelFor(name, i, dims));
     }
   }
@@ -313,26 +306,21 @@ export function compile(source, { memSize = 256 } = {}) {
 
   function stmtDo() {
     eat('DO');
-    const v = getVar(eat());
+    const name = eat();
+    const v = getVar(name);
+    if (v.isRef) throw new SyntaxError(`DO variable '${name}' cannot be a SUB argument (line ${currentLine})`);
     eat('=');
     const start = valAddr(parseExpr());
     eat(',');
     const stop = valAddr(parseExpr());
-    emit(v.isRef ? 'STORE_IND' : 'MOV', v.addr, start, 0);
+    emit('MOV', v.addr, start, 0);
     const loopTop = code.length;
-    const curAddr = v.isRef ? valAddr({ mode: 'IND', addr: v.addr }) : v.addr;
     const cmpTmp = alloc(1, 'scratch', 'do_cmp');
-    emit('<=', cmpTmp, curAddr, stop);
+    emit('<=', cmpTmp, v.addr, stop);
     const exitIdx = emit('JZ', 0, cmpTmp, 0, 'DO exit placeholder');
     parseBlock();
     eat('END');
-    if (v.isRef) {
-      const nxt = valAddr({ mode: 'IND', addr: v.addr });
-      emit('+', nxt, nxt, defConst(1));
-      emit('STORE_IND', v.addr, nxt, 0);
-    } else {
-      emit('+', v.addr, v.addr, defConst(1));
-    }
+    emit('+', v.addr, v.addr, defConst(1));
     emit('JMP', loopTop, 0, 0);
     patch(exitIdx, ['JZ', code.length, cmpTmp, 0], 'Patch DO exit');
   }
