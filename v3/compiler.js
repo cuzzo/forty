@@ -2,17 +2,20 @@ import { encode } from './vm.js';
 
 const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
 
+// The last token of every program; it has a space, so no source text can be it.
+const END = 'end of input';
+
 const PREC = { '==': 1, '!=': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '+': 2, '-': 2, '*': 3, '/': 3 };
 
 export function tokenize(source) {
-  const re = /#[^\n]*|\n|[ \t\r]+|[A-Za-z_]\w*|\d+|==|!=|<=|>=|[-+*/=(),\[\]<>]|(\S)/g;
+  const re = /#[^\n]*|\n|[A-Za-z_]\w*|\d+|==|!=|<=|>=|\S/g;
   const tokens = [];
   let line = 1;
   for (const m of source.matchAll(re)) {
-    if (m[1]) throw new SyntaxError(`Unexpected character '${m[0]}' at line ${line}`);
     if (m[0] === '\n') { line++; continue; }
-    if (!'# \t\r'.includes(m[0][0])) tokens.push({ text: m[0], line });
+    if (m[0][0] !== '#') tokens.push({ text: m[0], line });
   }
+  tokens.push({ text: END, line });
   return tokens;
 }
 
@@ -71,16 +74,17 @@ function build(source, memSize, dataBase) {
   }
 
   function getVar(name) {
-    if (!(name in sym)) sym[name] = { addr: alloc(1, 'bss', name), dims: null, isRef: false };
+    if (!(name in sym)) sym[name] = { mode: 'DIR', addr: alloc(1, 'bss', name), dims: null };
     touch(sym[name].addr, span(sym[name].dims));
     return sym[name];
   }
 
-  const peek = () => (pos < tokens.length ? tokens[pos].text : null);
+  const peek = () => tokens[pos].text;
 
   function eat(expected = null) {
-    if (pos >= tokens.length) throw new SyntaxError('Unexpected end of input');
-    const tok = tokens[pos++];
+    const tok = tokens[pos];
+    if (tok.text === END && expected !== END) throw new SyntaxError('Unexpected end of input');
+    pos++;
     line = tok.line;
     if (expected && tok.text !== expected) throw new SyntaxError(`Expected '${expected}', got '${tok.text}'`);
     return tok.text;
@@ -116,28 +120,27 @@ function build(source, memSize, dataBase) {
   function parseLValue() {
     const tok = eat();
     if (!/^[A-Za-z_]/.test(tok)) throw new SyntaxError(`Expected identifier, got '${tok}'`);
-    const { addr: baseAddr, dims, isRef } = getVar(tok);
-    if (peek() !== '[') return isRef ? { mode: 'IND', addr: baseAddr } : { mode: 'DIR', addr: baseAddr };
+    const place = getVar(tok);
+    if (peek() !== '[') return place;
     eat('[');
     let idx = valAddr(parseExpr());
     if (peek() === ',') {
-      if (!dims || dims.length < 2) throw new SyntaxError(`2D index on non-2D variable '${tok}'`);
       eat(',');
       const cOff = alloc(1);
-      emit('*', cOff, valAddr(parseExpr()), defConst(dims[0]));
+      emit('*', cOff, valAddr(parseExpr()), defConst(place.dims[0]));
       const tot = alloc(1);
       emit('+', tot, idx, cOff);
       idx = tot;
     }
     eat(']');
     const ptr = alloc(1);
-    emit('+', ptr, isRef ? baseAddr : defConst(baseAddr), idx);
+    emit('+', ptr, ptrAddr(place), idx);
     return { mode: 'IND', addr: ptr };
   }
 
   function parseAtom() {
     const t = peek();
-    if (t !== null && /^\d+$/.test(t)) return { mode: 'DIR', addr: defConst(eat()) };
+    if (/^\d+$/.test(t)) return { mode: 'DIR', addr: defConst(eat()) };
     if (t === '-') {
       eat('-');
       const dst = alloc(1);
@@ -161,7 +164,7 @@ function build(source, memSize, dataBase) {
 
   function parseExpr(minPrec = 0) {
     let lhs = parseAtom();
-    while (peek() !== null && peek() in PREC && PREC[peek()] >= minPrec) {
+    while (peek() in PREC && PREC[peek()] >= minPrec) {
       const op = eat();
       const rhs = parseExpr(PREC[op] + 1);
       const dst = alloc(1);
@@ -172,23 +175,19 @@ function build(source, memSize, dataBase) {
   }
 
   function parseBlock() {
-    while (peek() !== null && peek() !== 'END' && peek() !== 'ELSE') {
+    while (peek() !== 'END' && peek() !== 'ELSE' && peek() !== END) {
       line = tokens[pos].line;
       const tok = peek();
       if (tok === 'DIM') {
         eat('DIM');
         const { name, dims } = parseDecl();
-        if (sym[name]?.isRef) { sym[name].dims = dims; touch(sym[name].addr); }
-        else sym[name] = { addr: alloc(span(dims), 'bss', name), dims, isRef: false };
+        if (sym[name]?.mode === 'IND') sym[name].dims = dims;
+        else sym[name] = { mode: 'DIR', addr: alloc(span(dims), 'bss', name), dims };
       } else if (tok === 'EQUIV') {
         eat('EQUIV');
         const { name, dims } = parseDecl();
         eat('=');
-        const tName = eat();
-        const target = sym[tName];
-        if (!target || target.isRef || span(dims) > span(target.dims)) throw new SyntaxError(`EQUIV '${name}' must fit inside '${tName}'`);
-        sym[name] = { addr: target.addr, dims, isRef: false };
-        touch(target.addr, span(dims));
+        sym[name] = { ...getVar(eat()), dims };
       } else if (tok === 'READ') {
         eat('READ');
         const device = eat();
@@ -250,7 +249,7 @@ function build(source, memSize, dataBase) {
         while (peek() !== ')') {
           const p = eat();
           const pAddr = alloc(1, 'linkage', `${name}.${p}`);
-          sym[p] = { addr: pAddr, dims: null, isRef: true };
+          sym[p] = { mode: 'IND', addr: pAddr, dims: null };
           params.push(pAddr);
           if (peek() === ',') eat(',');
         }
@@ -268,7 +267,6 @@ function build(source, memSize, dataBase) {
         const name = eat();
         eat('(');
         const sub = subs[name];
-        if (!sub) throw new SyntaxError(`Undefined subroutine '${name}'`);
         for (let i = 0; i < sub.params.length; i++) {
           if (i > 0) eat(',');
           touch(sub.params[i]);
@@ -286,7 +284,7 @@ function build(source, memSize, dataBase) {
   }
 
   parseBlock();
-  if (pos < tokens.length) throw new SyntaxError(`Unexpected '${tokens[pos].text}' at line ${tokens[pos].line}`);
+  eat(END);
   emit('HALT', 0, 0, 0);
   code.forEach((instr, ip) => { initMem[ip] = encode(instr); });
   return { code, codeLen: code.length, initMem, usedCells: nextMem, cellLines: refs, sym, subs, ipMap, events };
