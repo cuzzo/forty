@@ -1,14 +1,24 @@
-# The v0 Implementation - A One-Pass Compiler for Pre-Heap FORTRAN
+# Forty V0 - A One-Pass Compiler for Pre-Heap FORTRAN
 
-v0 is the whole compiler. Every later version keeps it and adds one idea.
+This is a compiler for a subset of FORTRAN (most of it - pre-heap).
 
-This README does **not** teach tokenizing, recursive-descent parsing, backpatching
-or what machine code is. [Puck](https://github.com/cuzzo/clear/tree/master/examples/puck/README.md)
-builds all of those up from an 80-line start, one version at a time. Read it
+This README does **not** teach:
+
+ * tokenizing,
+ * recursive-descent parsing,
+ * backpatching,
+ * or what machine code is.
+
+[Puck](https://github.com/cuzzo/clear/tree/master/examples/puck/README.md)
+builds all of those up from an 80-SLoC start, one version at a time. Read it
 first if any of those words are new.
 
 What is worth reading here is how *this* compiler is put together, and what
 1950s FORTRAN asked of one: no heap, no stack, every variable at a fixed address.
+
+It comes with a visualizer that helps understand what that *actually* means,
+and it can help learn a lot about how today's computers work, from a much simpler
+starting point.
 
 ---
 
@@ -27,13 +37,15 @@ What is worth reading here is how *this* compiler is put together, and what
 
 Everything the regex does not know becomes a one-character token, so a stray
 `.` or `$` is rejected by the parser where it does not fit. Every program ends
-with an `end of input` token, so the parser never checks for running off the end.
+with an `end of input` token, so the parser never checks for running off the deep end.
 
 ### Parsing without a tree
 
-There is no AST. The parser **emits code as it reads**: by the time it has read
-`FACT = FACT * I`, the instructions for it exist. Expressions use precedence
-climbing over one table:
+There is no AST. The parser **emits code as it reads**. Modern languages are too 
+complicated to implement so simply.
+
+By the time the parser has read `FACT = FACT * I`, the instructions for it exist. 
+Expressions use precedence climbing over one table:
 
 ```js
 const PREC = { '==': 1, '!=': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '+': 2, '-': 2, '*': 3, '/': 3 };
