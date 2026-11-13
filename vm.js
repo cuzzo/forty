@@ -259,7 +259,6 @@ export function createVM(code, initMem, options = {}) {
       cycles: hw.cycles,
       drumAngle: drumAngle(),
       steps: hw.history.length,
-      pc: hw.history.at(-1)?.ip ?? null,
       ...extra,
     };
   }
@@ -444,7 +443,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
       cycles: hw.cycles,
       drumAngle: drumAngle(),
       steps: hw.history.length,
-      pc: hw.history.at(-1)?.ip ?? null,
       ...extra,
     };
   }

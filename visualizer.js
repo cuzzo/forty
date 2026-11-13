@@ -153,27 +153,6 @@ function fmtInstr(instr) {
   return `${instr[0].padEnd(10)} ${instr[1]}, ${instr[2]}, ${instr[3]}`;
 }
 
-// The instruction (and its source line) executed last, and the one executed next.
-export function marks(ipMap, state) {
-  const nextIp = state.halted ? null : state.ip;
-  return {
-    lastIp: state.pc,
-    nextIp,
-    lastLine: ipMap[state.pc]?.line ?? null,
-    nextLine: ipMap[nextIp]?.line ?? null,
-  };
-}
-
-function lineRow(num, text, last, next, extraClass = '', onClick = null) {
-  const props = { class: `code-line${last ? ' active' : ''}${extraClass}` };
-  if (onClick) props.onClick = onClick;
-  return el('div', props,
-    el('span', { class: 'ptr', text: next ? '>' : ' ' }),
-    el('span', { class: 'ip-num', text: num }),
-    el('span', { text }),
-  );
-}
-
 function replayCompileEvents(events, limit) {
   const code = [];
   let lastPatchedIp = -1;
@@ -297,12 +276,16 @@ export function mountVisualizer(doc = document) {
     buildProgram();
   }
 
-  function renderSourceLines(lastLine, nextLine) {
+  function renderSourceLines(activeLine) {
     dom.sourceLines.replaceChildren();
     const lines = dom.source.value.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const ln = i + 1;
-      dom.sourceLines.append(lineRow(String(ln).padStart(2, '0'), lines[i] || ' ', ln === lastLine, ln === nextLine));
+      const cls = `code-line${ln === activeLine ? ' active' : ''}`;
+      dom.sourceLines.append(el('div', { class: cls },
+        el('span', { class: 'ip-num', text: String(ln).padStart(2, '0') }),
+        el('span', { text: lines[i] || ' ' }),
+      ));
     }
   }
 
@@ -372,13 +355,16 @@ export function mountVisualizer(doc = document) {
   }
 
   function renderCode(state) {
-    const { lastIp, nextIp } = marks(compiled.debug.ipMap, state);
     dom.codeList.replaceChildren();
     if (dom.targetMode.value === 'riscv' && state.instrs) {
       dom.regsWrap.style.display = '';
       dom.compileScrubber.parentElement.style.display = 'none';
       for (let i = 0; i < state.instrs.length; i++) {
-        dom.codeList.append(lineRow(String(i).padStart(3, '0'), state.instrs[i].text, i === lastIp, i === nextIp));
+        const active = i === state.ip ? ' active' : '';
+        dom.codeList.append(el('div', { class: `code-line${active}` },
+          el('span', { class: 'ip-num', text: String(i).padStart(3, '0') }),
+          el('span', { text: state.instrs[i].text }),
+        ));
       }
       dom.regsGrid.replaceChildren();
       for (const [name, idx] of RV_DISPLAY_REGS) {
@@ -404,11 +390,17 @@ export function mountVisualizer(doc = document) {
     for (let i = 0; i < view.code.length; i++) {
       const instr = view.code[i];
       if (!instr) continue;
-      const patched = i === view.lastPatchedIp ? ' patched' : '';
-      dom.codeList.append(lineRow(String(i).padStart(3, '0'), fmtInstr(instr), i === lastIp, i === nextIp, patched, () => {
-        selectedLine = compiled.debug.ipMap[i]?.line ?? null;
-        render();
-      }));
+      const cls = `code-line${i === state.ip ? ' active' : ''}${i === view.lastPatchedIp ? ' patched' : ''}`;
+      dom.codeList.append(el('div', {
+        class: cls,
+        onClick: () => {
+          selectedLine = compiled.debug.ipMap[i]?.line ?? null;
+          renderSourceLines(selectedLine);
+        },
+      },
+      el('span', { class: 'ip-num', text: String(i).padStart(3, '0') }),
+      el('span', { text: fmtInstr(instr) }),
+      ));
     }
   }
 
@@ -484,8 +476,8 @@ export function mountVisualizer(doc = document) {
     dom.stepBackBtn.disabled = state.steps === 0;
     dom.stepBtn.disabled = state.halted;
 
-    const { lastLine, nextLine } = marks(compiled.debug.ipMap, state);
-    renderSourceLines(selectedLine ?? lastLine, nextLine);
+    const activeLine = selectedLine ?? compiled.debug.ipMap[lastEvent?.pc ?? state.ip]?.line ?? null;
+    renderSourceLines(activeLine);
     renderRam(state);
     renderCode(state);
     renderMatrices(state);

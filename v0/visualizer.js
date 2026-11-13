@@ -133,7 +133,7 @@ export function mount() {
     const writes = new Set(last.writes);
 
     statusBox.textContent = `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
-    effectBox.textContent = `effect: ${effect(prog, s)}`;
+    effectBox.textContent = effect(prog, s);
     outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
