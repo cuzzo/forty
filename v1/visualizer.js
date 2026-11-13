@@ -218,8 +218,9 @@ export function mount() {
         onMouseenter: () => [...linesBox.children].forEach((row, idx) => row.classList.toggle('hover', prog.cellLines[i].has(idx + 1))),
         onMouseleave: () => [...linesBox.children].forEach((row) => row.classList.remove('hover')),
       },
-        el('small', { text: isCode ? `${i === nextIp ? '> ' : ''}[${i}] code` : `[${i}] ${cell.label}` }),
-        el('strong', { text: isCode ? code[i].join(' ') : String(view ? prog.initMem[i] : s.MEM[i]) }),
+        ...(isCode
+          ? [el('small', { text: `${i === nextIp ? '> ' : ''}${String(i).padStart(2, '0')}` })]
+          : [el('small', { text: `[${i}] ${cell.label}` }), el('strong', { text: String(view ? prog.initMem[i] : s.MEM[i]) })]),
       ));
     }
 
