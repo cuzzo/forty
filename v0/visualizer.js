@@ -166,7 +166,11 @@ export function mount() {
     for (let i = 0; i < prog.usedCells; i++) {
       const cell = prog.cells[i];
       const flash = writes.has(i) ? ' write' : (reads.has(i) ? ' read' : '');
-      ramBox.append(el('div', { class: `cell ${cell.role}${flash}` },
+      ramBox.append(el('div', {
+        class: `cell ${cell.role}${flash}`,
+        onMouseenter: () => [...linesBox.children].forEach((row, idx) => row.classList.toggle('hover', prog.cellLines[i].has(idx + 1))),
+        onMouseleave: () => [...linesBox.children].forEach((row) => row.classList.remove('hover')),
+      },
         el('small', { text: `[${i}] ${cell.label}` }),
         el('strong', { text: String(s.MEM[i]) }),
       ));

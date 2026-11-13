@@ -1,3 +1,5 @@
+const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
+
 const PREC = { '==': 1, '!=': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '+': 2, '-': 2, '*': 3, '/': 3 };
 
 export function tokenize(source) {
@@ -15,6 +17,7 @@ export function compile(source, memSize = 256) {
   const tokens = tokenize(source);
   const initMem = new Int32Array(memSize);
   const cells = Array.from({ length: memSize }, () => ({ role: 'unused', label: '' }));
+  const refs = Array.from({ length: memSize }, () => new Set());
   const consts = new Map();
   const subs = Object.create(null);
   const code = [];
@@ -24,6 +27,10 @@ export function compile(source, memSize = 256) {
   let nextMem = 0;
   let line = 1;
 
+  function touch(addr, size = 1) {
+    for (let i = 0; i < size; i++) refs[addr + i].add(line);
+  }
+
   function alloc(size = 1, role = 'scratch', label = '') {
     if (nextMem + size > memSize) throw new Error(`RAM overflow (${memSize} cells)`);
     const base = nextMem;
@@ -31,6 +38,7 @@ export function compile(source, memSize = 256) {
     for (let i = 0; i < size; i++) {
       cells[base + i] = { role, label: size > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
     }
+    touch(base, size);
     return base;
   }
 
@@ -43,7 +51,7 @@ export function compile(source, memSize = 256) {
 
   function defConst(val) {
     const n = Number(val) | 0;
-    if (consts.has(n)) return consts.get(n);
+    if (consts.has(n)) { touch(consts.get(n)); return consts.get(n); }
     const addr = alloc(1, 'rodata', `const(${n})`);
     initMem[addr] = n;
     consts.set(n, addr);
@@ -52,6 +60,7 @@ export function compile(source, memSize = 256) {
 
   function getVar(name) {
     if (!(name in sym)) sym[name] = { addr: alloc(1, 'bss', name), dims: null, isRef: false };
+    touch(sym[name].addr, span(sym[name].dims));
     return sym[name];
   }
 
@@ -139,13 +148,13 @@ export function compile(source, memSize = 256) {
       if (tok === 'DIM') {
         eat('DIM');
         const { name, dims } = parseDecl();
-        const size = dims ? dims[0] * (dims[1] ?? 1) : 1;
-        sym[name] = { addr: alloc(size, 'bss', name), dims, isRef: false };
+        sym[name] = { addr: alloc(span(dims), 'bss', name), dims, isRef: false };
       } else if (tok === 'EQUIV') {
         eat('EQUIV');
         const { name, dims } = parseDecl();
         eat('=');
         sym[name] = { addr: sym[eat()].addr, dims, isRef: false };
+        touch(sym[name].addr, span(dims));
       } else if (tok === 'PRINT') {
         eat('PRINT');
         emit('PRINT', valAddr(parseExpr()), 0, 0);
@@ -211,9 +220,11 @@ export function compile(source, memSize = 256) {
         const sub = subs[name];
         for (let i = 0; i < sub.params.length; i++) {
           if (i > 0) eat(',');
+          touch(sub.params[i]);
           emit('MOV', sub.params[i], ptrAddr(parseExpr()), 0);
         }
         eat(')');
+        touch(sub.retSlot);
         emit('JAL', sub.retSlot, sub.entryIp, 0);
       } else {
         const lhs = parseLValue();
@@ -225,5 +236,5 @@ export function compile(source, memSize = 256) {
   }
 
   parseBlock();
-  return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), sym, subs, ipMap };
+  return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), cellLines: refs.slice(0, nextMem), sym, subs, ipMap };
 }

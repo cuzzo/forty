@@ -86,3 +86,19 @@ test('v0 names every opcode on hover', () => {
   assert.equal(describe(['JZ', 9, 5, 0], fact.cells), 'JZ (jump if zero): if M[5] tmp_5 is 0, go to instruction 9; else go to the next one');
   assert.equal(describe(['<=', 5, 4, 0], fact.cells), '<=: M[5] tmp_5 = M[4] I <= M[0] N (1 if true, 0 if false)');
 });
+
+test('v0 maps each memory cell to the source lines that use it', () => {
+  const lines = (prog, label) => [...prog.cellLines[prog.cells.findIndex((c) => c.label === label)]].sort((a, b) => a - b);
+  const fact = compile(DEMOS.factorial.code, 64);
+  assert.deepEqual(lines(fact, 'N'), [1, 3]);
+  assert.deepEqual(lines(fact, 'const(5)'), [1]);
+  assert.deepEqual(lines(fact, 'FACT'), [2, 4, 6]);
+  assert.deepEqual(lines(fact, 'I'), [3, 4]);
+  const swap = compile(DEMOS.swap.code, 64);
+  assert.deepEqual(lines(swap, 'SWAP.A'), [1, 2, 3, 8, 11]);
+  assert.deepEqual(lines(swap, 'SWAP.ret'), [1, 8, 11]);
+  const saxpy = compile(DEMOS.saxpy.code, 64);
+  assert.deepEqual(lines(saxpy, 'A[4]'), [1, 10, 13, 14]);
+  const equiv = compile(DEMOS.equiv.code, 64);
+  assert.deepEqual(lines(equiv, 'WORKSPACE[3]'), [1, 2, 3, 4, 5, 6, 8]);
+});
