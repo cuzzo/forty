@@ -5,8 +5,9 @@ spinning cylinder of 16 sectors, 8 words each, read by a head that never moves.
 
 The drum turns one word past the head per cycle, all the time. To read sector 5,
 the computer waits until sector 5 comes round, then copies its words one per
-cycle as they pass. On the IBM 704 the CPU did that copying itself, so the
-program waited for the read to finish. v2 does the same.
+cycle as they pass. On the [IBM 704](https://en.wikipedia.org/wiki/IBM_704)
+the CPU did that copying itself, so the program waited for the read to finish. 
+v2 does the same.
 
 ---
 
