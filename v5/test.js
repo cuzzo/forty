@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CARD_ROWS, COST, DRUM_WORD_CYCLES, GAP, RECORD_SPAN, REWIND_SPEED, ROW_CYCLES, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, encode, headAt, ioWait, tagOf } from './vm.js';
-import { DEMOS, MEM_SIZE, PUNCH_ORDER, TAPE_DATA, cardPunches, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
+import { DEMOS, MEM_SIZE, PUNCH_ORDER, TAPE_DATA, cardPunches, compileView, describe, drumLayout, effect, layout, marks, saving } from './visualizer.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
 // v0-v3's memory-counter code, for the tests that pin it.
@@ -235,4 +235,27 @@ test('v5 scopes SUB locals, reads devices into SUB arrays, and rejects what does
   assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
   assert.equal(effect(layout('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
   assert.equal(decode(encode(['MOV', 5 | (2 << 7), 6, 0]))[1] >> 7, 2);
+});
+
+test('v5 credits each instruction\'s saving as it runs, adding up to the whole-run difference', () => {
+  const live = (source, demo) => {
+    const prog = layout(source, MEM_SIZE);
+    const vm = createVM(prog.initMem, demo.drum, demo.tape, false);
+    let total = 0;
+    while (!vm.getState().halted) {
+      const s = vm.getState();
+      if (!s.io) total += saving(decode(s.MEM[s.ip]));
+      vm.step();
+    }
+    return total;
+  };
+  const cpu = (source, registers, demo) => {
+    const { state } = run(source, { registers, drum: demo.drum, tape: demo.tape });
+    return state.cycles - state.waited;
+  };
+  const heavy = { code: 'DO I = 1, 6\n  PUNCH I, I * I, I * I * I\nEND' };
+  for (const demo of [...Object.values(DEMOS), heavy]) assert.equal(live(demo.code, demo), cpu(demo.code, 0, demo) - cpu(demo.code, 3, demo), demo.name);
+  assert.deepEqual(['TXH', 'TXI', 'LXD', 'PXD'].map((op) => saving([op, 0, 0, 0])), [10, 6, 2, -4]);
+  assert.deepEqual([saving(['MOV', 5 | (1 << 7), 6, 0]), saving(['+', 7, 5 | (1 << 7), 6]), saving(['MOV', 5, 6, 0])], [8, 12, 0]);
+  assert.equal(live(heavy.code, heavy), -36);
 });

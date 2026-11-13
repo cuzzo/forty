@@ -137,6 +137,22 @@ export function effect(prog, state) {
   return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[ea(b)], M[ea(c)])} -> ${name(a)}`;
 }
 
+// Cycles an instruction saves each time it runs, against the same program compiled without index registers
+// (negative when it costs more). TXH replaces a compare and a JZ, TXI an add and a JMP, LXD a MOV; PXD is extra;
+// an indexed operand replaces the add and LOAD_IND that work out a read's address, or the add and STORE_IND
+// (in place of MOV) of a write. Control flow is the same either way, so these add up to the whole-run difference.
+const READ_OPERANDS = { MOV: [2], LOAD_IND: [2], STORE_IND: [1, 2], PRINT: [1], JZ: [2], CARD: [1], LXD: [2], TXH: [2], DRUM_READ: [1, 2] };
+
+export function saving(instr) {
+  const [op, a] = instr;
+  const reads = READ_OPERANDS[op] ?? (op in ALU ? [2, 3] : []);
+  const fixed = { TXH: 10, TXI: 6, LXD: 2, PXD: -4 }[op] ?? 0;
+  return fixed + reads.filter((k) => tagOf(instr[k])).length * 12 + (op === 'MOV' && tagOf(a) ? 8 : 0);
+}
+
+const savingNote = (n) => (n > 0 ? ` (saves ${n} cycles)` : n < 0 ? ` (costs ${-n} cycles)` : '');
+const badge = (n) => el('span', { class: `gain${n < 0 ? ' cost' : ''}`, text: n > 0 ? `+${n}` : `\u2212${-n}` });
+
 // Hover text for one instruction: the opcode's name and what it does with these operands.
 export function describe([op, a, b, c], cells) {
   const reg = (r) => 'ABC'[r];
@@ -260,6 +276,10 @@ export function mount() {
   let building = null;
   // How many VM steps each advance() took, so Previous undoes the same amount.
   const batches = [];
+  // Cycles the index registers have saved so far this run, and the whole run's instruction cycles with and without them.
+  let saved = 0;
+  let runWith = '?';
+  let runWithout = '?';
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -366,7 +386,8 @@ export function mount() {
     statusBox.textContent = view
       ? `compiling: ${building}/${prog.events.length}`
       : `pc ${s.pc ?? '-'} | next ${nextIp ?? '-'} | cycle ${s.cycles} | waited ${s.waited}${s.halted ? ' | HALTED' : ''}`;
-    effectBox.textContent = view ? '' : effect(prog, s);
+    effectBox.textContent = view ? '' : effect(prog, s) + (s.io || s.halted ? '' : savingNote(saving(decode(s.MEM[s.ip]))));
+    regsHead.textContent = `INDEX REGISTERS  saved ${saved} of ${runWithout - runWith} cycles so far (whole run: ${runWith} instruction cycles, ${runWithout} without them)`;
     outBox.textContent = s.stdout.join('\n');
     cardsBox.replaceChildren(...s.cards.map((values) => card(values)), ...(s.io?.kind === 'punch' ? [card(s.io.values, s.io.done)] : []));
     cardsBox.scrollTop = cardsBox.scrollHeight;
@@ -429,6 +450,7 @@ export function mount() {
         onClick: () => render(i),
       },
       el('span', { text: `${isNext ? '>' : ' '} ${String(i).padStart(2, '0')}: ${instr.map((x, k) => (k && tagOf(x) ? `${x & 127},${'ABC'[tagOf(x) - 1]}` : x)).join(' ')}` }),
+      ...(saving(instr) ? [badge(saving(instr))] : []),
       );
       codeBox.append(row);
       if (isNext || (nextIp === null && active)) row.scrollIntoView({ block: 'nearest' });
@@ -450,7 +472,9 @@ export function mount() {
     last = { reads: [], writes: [] };
     building = walk ? 0 : null;
     batches.length = 0;
-    regsHead.textContent = `INDEX REGISTERS  whole run: ${instructionCycles(3)} instruction cycles, ${instructionCycles(0)} without them`;
+    saved = 0;
+    runWith = instructionCycles(3);
+    runWithout = instructionCycles(0);
   }
 
   // The cycles a whole run spends on instructions (not waiting on devices) with this many index registers; run
@@ -513,7 +537,9 @@ export function mount() {
     }
     if (!prog) load(false);
     if (vm.getState().halted) return false;
-    const done = vm.getState().io?.done;
+    const start = vm.getState();
+    const gain = start.io ? 0 : saving(decode(start.MEM[start.ip]));
+    const done = start.io?.done;
     let n = 0;
     let io;
     do {
@@ -521,7 +547,8 @@ export function mount() {
       n++;
       io = vm.getState().io;
     } while (io && io.done === done && n < (io.kind === 'punch' ? ROW_CYCLES : SECTOR_WORDS * DRUM_WORD_CYCLES));
-    batches.push(n);
+    batches.push({ n, gain });
+    saved += gain;
     return !last.halted;
   }
 
@@ -537,7 +564,9 @@ export function mount() {
     stop();
     if (building !== null) building = Math.max(0, building - 1);
     else if (vm) {
-      for (let n = batches.pop() ?? 1; n > 0; n--) vm.stepBack();
+      const { n, gain } = batches.pop() ?? { n: 1, gain: 0 };
+      for (let k = 0; k < n; k++) vm.stepBack();
+      saved -= gain;
       last = { reads: [], writes: [] };
     }
     render();
