@@ -372,7 +372,7 @@ export function mount() {
     cardsBox.scrollTop = cardsBox.scrollHeight;
     regsBox.replaceChildren(...[0, 1, 2].map((r) => {
       const holder = prog.regLoops.find((l) => l.reg === r && s.pc >= l.from && s.pc < l.to)?.name;
-      return el('div', { class: `reg${holder ? ' live' : ''}` }, el('small', { text: `${'ABC'[r]}${holder ? ` = ${holder}` : ''}` }), el('strong', { text: String(s.XR[r]) }));
+      return el('div', { class: `reg${holder ? ' live' : ''}`, text: `${'ABC'[r]}${holder ? ` = ${holder}` : ''} (${s.XR[r]})` });
     }));
 
     linesBox.replaceChildren();
