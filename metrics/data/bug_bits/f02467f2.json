@@ -1,0 +1,79 @@
+{
+ "rev": "f02467f2",
+ "dirs": {
+  ".": {
+   "total_bits": 406.0,
+   "path_bits": 364.0,
+   "state_bits": 42.0,
+   "ordering_bits": 0.0
+  },
+  "v0": {
+   "total_bits": 194.0,
+   "path_bits": 174.0,
+   "state_bits": 20.0,
+   "ordering_bits": 0.0
+  },
+  "v1": {
+   "total_bits": 205.0,
+   "path_bits": 186.0,
+   "state_bits": 19.0,
+   "ordering_bits": 0.0
+  },
+  "v2": {
+   "total_bits": 246.0,
+   "path_bits": 225.0,
+   "state_bits": 21.0,
+   "ordering_bits": 0.0
+  },
+  "v3": {
+   "total_bits": 283.0,
+   "path_bits": 260.0,
+   "state_bits": 23.0,
+   "ordering_bits": 0.0
+  }
+ },
+ "total": {
+  "total_bits": 1334.0,
+  "path_bits": 1209.0,
+  "state_bits": 125.0,
+  "ordering_bits": 0.0
+ },
+ "compilers": {
+  ".": {
+   "total_bits": 89.0,
+   "path_bits": 82.0,
+   "state_bits": 7.0,
+   "ordering_bits": 0.0
+  },
+  "v0": {
+   "total_bits": 49.0,
+   "path_bits": 44.0,
+   "state_bits": 5.0,
+   "ordering_bits": 0.0
+  },
+  "v1": {
+   "total_bits": 49.0,
+   "path_bits": 44.0,
+   "state_bits": 5.0,
+   "ordering_bits": 0.0
+  },
+  "v2": {
+   "total_bits": 51.0,
+   "path_bits": 46.0,
+   "state_bits": 5.0,
+   "ordering_bits": 0.0
+  },
+  "v3": {
+   "total_bits": 55.0,
+   "path_bits": 50.0,
+   "state_bits": 5.0,
+   "ordering_bits": 0.0
+  }
+ },
+ "compiler_total": {
+  "total_bits": 293.0,
+  "path_bits": 266.0,
+  "state_bits": 27.0,
+  "ordering_bits": 0.0
+ }
+}
