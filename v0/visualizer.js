@@ -137,22 +137,16 @@ export function mount() {
     outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
-    srcBox.value.split('\n').forEach((text, idx) => {
+    srcBox.value.split('\n').forEach((_, idx) => {
       const ln = idx + 1;
-      const active = ln === activeLine;
-      const isNext = ln === nextLine;
-      const row = el('div', {
-        class: `line${active ? ' active' : ''}`,
-        onClick: () => {
-          const ip = prog.ipMap.indexOf(ln);
-          if (ip >= 0) render(ip);
-        },
-      },
-      el('span', { text: `${isNext ? '>' : ' '} ${String(ln).padStart(2, '0')} ${text}` }),
-      );
-      linesBox.append(row);
-      if (isNext || (nextLine === null && active)) row.scrollIntoView({ block: 'nearest' });
+      linesBox.append(el('div', { class: `line${ln === activeLine ? ' active' : ''}`, text: ln === nextLine ? '>' : ' ' }));
     });
+    const focusLine = nextLine ?? activeLine;
+    if (focusLine) {
+      const top = (focusLine - 1) * 18;
+      if (top < srcBox.scrollTop || top + 34 > srcBox.scrollTop + srcBox.clientHeight) srcBox.scrollTop = Math.max(0, top - 36);
+    }
+    linesBox.scrollTop = srcBox.scrollTop;
 
     ramBox.replaceChildren();
     for (let i = 0; i < prog.usedCells; i++) {
@@ -208,7 +202,7 @@ export function mount() {
       if (last.halted) stop();
     }, 60);
   });
-  linesBox.addEventListener('scroll', drawArrow);
+  srcBox.addEventListener('scroll', () => { linesBox.scrollTop = srcBox.scrollTop; drawArrow(); });
   codeBox.addEventListener('scroll', drawArrow);
   window.addEventListener('resize', drawArrow);
 
