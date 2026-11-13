@@ -23,6 +23,12 @@ export const headAt = (cycles) => {
   return { sector: Math.floor(word / SECTOR_WORDS), word: word % SECTOR_WORDS };
 };
 
+// Cycles until the next word a DRUM_READ needs comes under the head (0 when none is waited for).
+export const waitCycles = ({ io, cycles }) => {
+  const turn = SECTORS * SECTOR_WORDS;
+  return io ? (io.sector * SECTOR_WORDS + io.done - (cycles % turn) + turn) % turn : 0;
+};
+
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
 export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
 export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 18) & 511, (word >>> 9) & 511, word & 511];
@@ -95,7 +101,7 @@ export function createVM(initMem, drum = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(b);
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { sector: MEM[b], addr: a, done: 0 };
+      io = { sector: MEM[b], addr: a, done: 0, at: cycles };
       ip = pc;
     } else if (op in ALU) {
       reads.push(b, c); writes.push(a);

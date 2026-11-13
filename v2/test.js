@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
-import { SECTOR_WORDS, createVM, decode } from './vm.js';
+import { SECTOR_WORDS, createVM, decode, waitCycles } from './vm.js';
 import { DEMOS, MEM_SIZE, compileView, describe, drumLayout, effect, marks } from './visualizer.js';
 
 function run(source) {
@@ -170,10 +170,12 @@ test('v2 DRUM_READ waits for its sector, copies one word per cycle, and steps ba
   const vm = createVM(prog.initMem, drumLayout(1));
   const b = prog.sym.B.addr;
   vm.step();
-  assert.deepEqual([vm.getState().cycles, vm.getState().io], [1, { sector: 0, addr: b, done: 0 }]);
-  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0 (head at sector 0)');
+  assert.deepEqual([vm.getState().cycles, vm.getState().io], [1, { sector: 0, addr: b, done: 0, at: 1 }]);
+  assert.equal(waitCycles(vm.getState()), 127);
+  assert.equal(effect(prog, vm.getState()), 'wait 127 cycles for drum sector 0 to turn to the head');
   while (vm.getState().cycles < 128) vm.step();
   assert.equal(vm.getState().waited, 127);
+  assert.equal(waitCycles(vm.getState()), 0);
   assert.equal(effect(prog, vm.getState()), 'drum sector 0 word 0 (1) -> B[0]');
   assert.deepEqual(vm.step().writes, [b]);
   vm.step();
@@ -183,6 +185,8 @@ test('v2 DRUM_READ waits for its sector, copies one word per cycle, and steps ba
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [8]);
   assert.equal(vm.getState().cycles, 140);
+  assert.equal(waitCycles({ io: { sector: 3, done: 0 }, cycles: 130 }), 22);
+  assert.equal(waitCycles({ io: null, cycles: 5 }), 0);
   assert.throws(() => { const bad = createVM(compile('DIM B(8)\nREAD DRUM 16, B', MEM_SIZE).initMem); bad.step(); }, /No drum sector 16/);
 });
 

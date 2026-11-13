@@ -1,5 +1,5 @@
 import { compile } from './compiler.js';
-import { ALU, SECTORS, SECTOR_WORDS, createVM, decode, headAt } from './vm.js';
+import { ALU, SECTORS, SECTOR_WORDS, createVM, decode, headAt, waitCycles } from './vm.js';
 
 export const MEM_SIZE = 128;
 
@@ -60,9 +60,9 @@ export function effect(prog, state) {
   const M = state.MEM;
   const name = (i) => prog.cells[i]?.label || `M[${i}]`;
   if (state.io) {
-    const head = headAt(state.cycles);
     const { sector, addr, done } = state.io;
-    if (head.sector !== sector || head.word !== done) return `waiting for drum sector ${sector} (head at sector ${head.sector})`;
+    const wait = waitCycles(state);
+    if (wait) return `wait ${wait} cycles for drum sector ${sector} to turn to the head`;
     return `drum sector ${sector} word ${done} (${state.DRUM[sector * SECTOR_WORDS + done]}) -> ${name(addr + done)}`;
   }
   const val = (i) => `${name(i)} (${M[i]})`;
@@ -195,7 +195,10 @@ export function mount() {
   function renderDrum(words, cycles, io, waited) {
     const head = headAt(cycles);
     drumHead.textContent = `DRUM  head S${String(head.sector).padStart(2, '0')}  cycles ${cycles}  waited ${waited}`;
-    drumBox.replaceChildren(...Array.from({ length: SECTORS }, (_, sec) => el('div', { class: `sector${io?.sector === sec ? ' want' : ''}` },
+    drumBox.replaceChildren(...Array.from({ length: SECTORS }, (_, row) => (head.sector + row) % SECTORS).map((sec, row) => el('div', {
+      class: `sector${row === 0 ? ' at-head' : ''}${io?.sector === sec ? ' want' : ''}`,
+    },
+      el('span', { class: 'mark', text: row === 0 ? 'HEAD' : '' }),
       el('span', { class: 'sec', text: `S${String(sec).padStart(2, '0')}` }),
       ...Array.from({ length: SECTOR_WORDS }, (_, w) => el('span', {
         class: `w${head.sector === sec && head.word === w ? ' under' : ''}${io?.sector === sec && w < io.done ? ' copied' : ''}`,
@@ -336,11 +339,20 @@ export function mount() {
   demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; unload(); render(); });
   srcBox.addEventListener('input', () => { unload(); render(); });
   document.getElementById('compile').addEventListener('click', () => { stop(); load(true); render(); });
-  document.getElementById('step').addEventListener('click', () => { stop(); advance(); render(); });
+  document.getElementById('step').addEventListener('click', () => {
+    stop();
+    if (building === null && vm && waitCycles(vm.getState())) while (waitCycles(vm.getState())) vm.step();
+    else advance();
+    render();
+  });
   document.getElementById('back').addEventListener('click', () => {
     stop();
     if (building !== null) building = Math.max(0, building - 1);
-    else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
+    else if (vm) {
+      vm.stepBack();
+      while (waitCycles(vm.getState()) && vm.getState().cycles !== vm.getState().io.at) vm.stepBack();
+      last = { reads: [], writes: [] };
+    }
     render();
   });
   document.getElementById('reset').addEventListener('click', () => { unload(); render(); });
