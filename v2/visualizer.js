@@ -192,19 +192,21 @@ export function mount() {
     arrowSvg.append(defs, path);
   }
 
+  // A reel: the sector under the head in the middle, the one just gone above, the next one below.
   function renderDrum(words, cycles, io, waited) {
     const head = headAt(cycles);
-    drumHead.textContent = `DRUM  head S${String(head.sector).padStart(2, '0')}  cycles ${cycles}  waited ${waited}`;
-    drumBox.replaceChildren(...Array.from({ length: SECTORS }, (_, row) => (head.sector + row) % SECTORS).map((sec, row) => el('div', {
-      class: `sector${row === 0 ? ' at-head' : ''}${io?.sector === sec ? ' want' : ''}`,
-    },
-      el('span', { class: 'mark', text: row === 0 ? 'HEAD' : '' }),
-      el('span', { class: 'sec', text: `S${String(sec).padStart(2, '0')}` }),
-      ...Array.from({ length: SECTOR_WORDS }, (_, w) => el('span', {
-        class: `w${head.sector === sec && head.word === w ? ' under' : ''}${io?.sector === sec && w < io.done ? ' copied' : ''}`,
-        text: String(words[sec * SECTOR_WORDS + w]),
-      })),
-    )));
+    const sec2 = (sec) => `S${String(sec).padStart(2, '0')}`;
+    drumHead.textContent = `DRUM  cycles ${cycles}  waited ${waited}${io ? `  reading ${sec2(io.sector)}` : ''}`;
+    drumBox.replaceChildren(...[-1, 0, 1].map((d) => {
+      const sec = (head.sector + d + SECTORS) % SECTORS;
+      return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${io?.sector === sec ? ' want' : ''}` },
+        el('span', { class: 'mark', text: d === 0 ? 'HEAD' : '' }),
+        el('span', { class: 'sec', text: sec2(sec) }),
+        ...Array.from({ length: SECTOR_WORDS }, (_, w) => el('span', {
+          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${io?.sector === sec && w < io.done ? ' copied' : ''}`,
+          text: String(words[sec * SECTOR_WORDS + w]),
+        })));
+    }));
   }
 
   function render(focusIp = null) {
