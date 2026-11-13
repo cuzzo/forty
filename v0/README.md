@@ -41,8 +41,12 @@ with an `end of input` token, so the parser never checks for running off the dee
 
 ### Parsing without a tree
 
-There is no AST. The parser **emits code as it reads**. Modern languages are too 
-complicated to implement so simply.
+There is no AST. The parser **emits code as it reads**. Real FORTRAN didn't do this
+because it optimized the code far more than we do.
+
+Since we *aren't* doing that we can change the language slightly. It makes this 
+possible, which makes the compiler simple. This simplicity isn't possible in 
+most common languages today.
 
 By the time the parser has read `FACT = FACT * I`, the instructions for it exist. 
 Expressions use precedence climbing over one table:
