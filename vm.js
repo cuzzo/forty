@@ -32,8 +32,6 @@ function createHardware(initMem, options) {
   const {
     debug = null,
     protectRodata = false,
-    enableRuntimeStackHeap = debug?.enableRuntimeStackHeap ?? false,
-    heapMode = debug?.heapMode ?? 'bump',
     initTape = [],
     initTapes = null,
     initDrum = null,
@@ -42,14 +40,9 @@ function createHardware(initMem, options) {
     sectorWords = 8,
     cyclesPerSector = 4,
     maxHistory = 10000,
-    maxMemSize = 4096,
   } = options;
 
-  const heapStart = debug?.heapStart ?? initMem.length;
   const drumSize = drumTracks * drumSectors * sectorWords;
-  const stackReserve = enableRuntimeStackHeap ? Math.min(64, Math.floor((initMem.length - heapStart) / 3)) : 0;
-  const spaceSize = Math.floor((initMem.length - heapStart - stackReserve) / 2);
-
   const hw = {
     MEM: new Int32Array(initMem),
     drum: new Int32Array(drumSize),
@@ -60,12 +53,6 @@ function createHardware(initMem, options) {
     cycles: 0,
     halted: false,
     trap: null,
-    fromSpace: heapStart,
-    toSpace: heapStart + spaceSize,
-    spaceSize,
-    heapStart,
-    enableRuntimeStackHeap,
-    heapMode,
   };
 
   if (initDrum) hw.drum.set(initDrum.subarray ? initDrum.subarray(0, drumSize) : initDrum.slice(0, drumSize));
@@ -90,12 +77,10 @@ function createHardware(initMem, options) {
 
   function writeCell(addr, val, ev) {
     if (!checkAddr(addr, true)) return false;
-    if (ev) {
-      ev.writes.push(addr);
-      if (!(addr in ev.prevValues)) ev.prevValues[addr] = hw.MEM[addr];
-    }
+    ev.writes.push(addr);
+    if (!(addr in ev.prevValues)) ev.prevValues[addr] = hw.MEM[addr];
     hw.MEM[addr] = val | 0;
-    if (ev) ev.newValues[addr] = hw.MEM[addr];
+    ev.newValues[addr] = hw.MEM[addr];
     return true;
   }
 
@@ -173,151 +158,7 @@ function createHardware(initMem, options) {
     return stallCycles + 1;
   }
 
-  function growMem(needed) {
-    if (needed <= hw.MEM.length) return true;
-    if (enableRuntimeStackHeap || hw.MEM.length + 64 > maxMemSize) return false;
-    const grown = new Int32Array(Math.max(hw.MEM.length + 64, needed));
-    grown.set(hw.MEM);
-    hw.MEM = grown;
-    return true;
-  }
-
-  function heapLimit() {
-    return enableRuntimeStackHeap ? hw.MEM[1] : hw.MEM.length;
-  }
-
-  function bumpHighWater(endAddr, ev) {
-    if (enableRuntimeStackHeap && endAddr > hw.MEM[0]) writeCell(0, endAddr, ev);
-  }
-
-  function gcCollect(ev) {
-    let freePtr = hw.toSpace;
-    const trace = [];
-    for (const root of debug?.ptrRoots ?? []) {
-      if (!checkAddr(root, false)) return false;
-      const oldPtr = hw.MEM[root];
-      trace.push({ kind: 'scan_root', root, oldPtr });
-      if (oldPtr < hw.fromSpace || oldPtr >= hw.fromSpace + hw.spaceSize) continue;
-
-      const hdr = hw.MEM[oldPtr - 1];
-      if (hdr < 0) {
-        writeCell(root, -hdr, ev);
-        continue;
-      }
-      const newPtr = freePtr + 1;
-      writeCell(freePtr, hdr, ev);
-      for (let k = 0; k < hdr; k++) {
-        writeCell(newPtr + k, hw.MEM[oldPtr + k], ev);
-      }
-      writeCell(oldPtr - 1, -newPtr, ev);
-      writeCell(root, newPtr, ev);
-      freePtr += hdr + 1;
-      trace.push({ kind: 'copy_block', from: oldPtr, to: newPtr, size: hdr });
-      trace.push({ kind: 'write_forwarding_ptr', cell: oldPtr - 1, forwardTo: newPtr });
-    }
-    writeCell(0, freePtr, ev);
-    const prevFrom = hw.fromSpace;
-    hw.fromSpace = hw.toSpace;
-    hw.toSpace = prevFrom;
-    trace.push({ kind: 'flip_semispace', fromSpace: hw.fromSpace, toSpace: hw.toSpace, hp: freePtr });
-    ev.gcTrace = trace;
-    return true;
-  }
-
-  function heapNew(sz, ev) {
-    if (sz < 0) {
-      fail('TRAP_OOM', `Invalid allocation size ${sz}`);
-      return null;
-    }
-
-    if (heapMode === 'bump') {
-      const hp = hw.MEM[0];
-      if (hp + sz > heapLimit()) {
-        fail('TRAP_OOM', `Heap bump overflow: needed ${sz} at HP=${hp}`);
-        return null;
-      }
-      writeCell(0, hp + sz, ev);
-      return hp;
-    }
-
-    if (heapMode === 'firstFit') {
-      let h = heapStart;
-      const limit = heapLimit();
-      while (h + 2 <= limit && hw.MEM[h] !== 0 && (hw.MEM[h + 1] === 1 || hw.MEM[h] < sz)) {
-        h += hw.MEM[h] + 2;
-      }
-      if (h + sz + 2 > limit) {
-        fail('TRAP_OOM', `Heap first-fit overflow: needed ${sz} words`);
-        return null;
-      }
-      if (hw.MEM[h] === 0) writeCell(h, sz, ev);
-      writeCell(h + 1, 1, ev);
-      bumpHighWater(h + hw.MEM[h] + 2, ev);
-      return h + 2;
-    }
-
-    if (heapMode === 'coalesceSplit') {
-      let h = heapStart;
-      while (true) {
-        if (h + sz + 4 >= hw.MEM.length && !growMem(h + sz + 4)) {
-          if (h + sz + 2 > heapLimit()) {
-            fail('TRAP_OOM', `Heap coalesce/split overflow: needed ${sz} words`);
-            return null;
-          }
-        }
-        if (h + sz + 2 > heapLimit()) {
-          fail('TRAP_OOM', `Heap coalesce/split overflow: needed ${sz} words`);
-          return null;
-        }
-        if (hw.MEM[h] === 0) {
-          writeCell(h, sz, ev);
-          break;
-        }
-        let nxt = h + hw.MEM[h] + 2;
-        while (hw.MEM[h + 1] === 0 && nxt + 1 < heapLimit() && hw.MEM[nxt] !== 0 && hw.MEM[nxt + 1] === 0) {
-          writeCell(h, hw.MEM[h] + hw.MEM[nxt] + 2, ev);
-          nxt = h + hw.MEM[h] + 2;
-        }
-        if (hw.MEM[h + 1] === 0 && hw.MEM[h] >= sz) {
-          if (hw.MEM[h] >= sz + 3) {
-            const rem = hw.MEM[h] - sz - 2;
-            writeCell(h, sz, ev);
-            writeCell(h + sz + 2, rem, ev);
-            writeCell(h + sz + 3, 0, ev);
-          }
-          break;
-        }
-        h += hw.MEM[h] + 2;
-      }
-      writeCell(h + 1, 1, ev);
-      bumpHighWater(h + hw.MEM[h] + 2, ev);
-      return h + 2;
-    }
-
-    if (heapMode === 'semiSpaceGC') {
-      if (hw.MEM[0] + sz + 1 > hw.fromSpace + hw.spaceSize) {
-        if (!gcCollect(ev)) return null;
-      }
-      const hp = hw.MEM[0];
-      if (hp + sz + 1 > hw.fromSpace + hw.spaceSize) {
-        fail('TRAP_OOM', `Semi-space GC out of memory after collection (needed ${sz})`);
-        return null;
-      }
-      writeCell(hp, sz, ev);
-      writeCell(0, hp + sz + 1, ev);
-      return hp + 1;
-    }
-
-    fail('TRAP_ILLEGAL_OP', `Unknown heap mode '${heapMode}'`);
-    return null;
-  }
-
-  function heapFree(ptr, ev) {
-    if (heapMode === 'bump' || heapMode === 'semiSpaceGC') return true;
-    return writeCell(ptr - 1, 0, ev);
-  }
-
-  function pushSnapshot(ip, extra = null) {
+  function pushSnapshot(ip, regs = null) {
     const snap = {
       ip,
       mem: hw.MEM.slice(),
@@ -327,9 +168,7 @@ function createHardware(initMem, options) {
       tapePrev: null,
       drumPrev: null,
       cycles: hw.cycles,
-      fromSpace: hw.fromSpace,
-      toSpace: hw.toSpace,
-      extra,
+      regs,
     };
     if (hw.history.length >= maxHistory) hw.history.shift();
     hw.history.push(snap);
@@ -339,7 +178,6 @@ function createHardware(initMem, options) {
   function popSnapshot() {
     const snap = hw.history.pop();
     if (!snap) return null;
-    if (hw.MEM.length !== snap.mem.length) hw.MEM = new Int32Array(snap.mem.length);
     hw.MEM.set(snap.mem);
     hw.stdout.length = snap.stdoutLen;
     if (snap.tapePrev) hw.tapes[snap.tapePrev.unit][snap.tapePrev.pos] = snap.tapePrev.val;
@@ -347,15 +185,12 @@ function createHardware(initMem, options) {
     hw.tapeHeads.set(snap.tapeHeads);
     if (snap.drumPrev) hw.drum.set(snap.drumPrev.data, snap.drumPrev.offset);
     hw.cycles = snap.cycles;
-    hw.fromSpace = snap.fromSpace;
-    hw.toSpace = snap.toSpace;
     hw.halted = false;
     hw.trap = null;
     return snap;
   }
 
   function resetHardware() {
-    if (hw.MEM.length !== initMem.length) hw.MEM = new Int32Array(initMem.length);
     hw.MEM.set(initMem);
     hw.drum.fill(0);
     if (initDrum) hw.drum.set(initDrum.subarray ? initDrum.subarray(0, drumSize) : initDrum.slice(0, drumSize));
@@ -368,27 +203,14 @@ function createHardware(initMem, options) {
     hw.cycles = 0;
     hw.stdout.length = 0;
     hw.history.length = 0;
-    hw.fromSpace = heapStart;
-    hw.toSpace = heapStart + spaceSize;
     hw.halted = false;
     hw.trap = null;
   }
 
   return {
-    hw,
-    drumAngle,
-    fail,
-    checkAddr,
-    writeCell,
-    readTape,
-    writeTape,
-    rewindTape,
-    dmaDrum,
-    heapNew,
-    heapFree,
-    pushSnapshot,
-    popSnapshot,
-    resetHardware,
+    hw, drumAngle, fail, checkAddr, writeCell,
+    readTape, writeTape, rewindTape, dmaDrum,
+    pushSnapshot, popSnapshot, resetHardware,
   };
 }
 
@@ -417,7 +239,7 @@ function attachRunControls(stepFn, stepBackFn, resetFn, getStateFn, hw) {
 
 export function createVM(code, initMem, options = {}) {
   const ops = createHardware(initMem, options);
-  const { hw, drumAngle, fail, checkAddr, writeCell, readTape, writeTape, rewindTape, dmaDrum, heapNew, heapFree, pushSnapshot, popSnapshot, resetHardware } = ops;
+  const { hw, drumAngle, fail, checkAddr, writeCell, readTape, writeTape, rewindTape, dmaDrum, pushSnapshot, popSnapshot, resetHardware } = ops;
 
   let ip = 0;
   hw.halted = code.length === 0;
@@ -437,9 +259,6 @@ export function createVM(code, initMem, options = {}) {
       cycles: hw.cycles,
       drumAngle: drumAngle(),
       steps: hw.history.length,
-      semiSpace: hw.heapMode === 'semiSpaceGC'
-        ? { fromSpace: hw.fromSpace, toSpace: hw.toSpace, spaceSize: hw.spaceSize }
-        : null,
       ...extra,
     };
   }
@@ -470,7 +289,6 @@ export function createVM(code, initMem, options = {}) {
       printVal: null,
       tape: null,
       drum: null,
-      gcTrace: null,
       cycles: 0,
       trap: null,
     };
@@ -518,17 +336,6 @@ export function createVM(code, initMem, options = {}) {
         const usedCycles = dmaDrum(isRead, ramAddr, hw.MEM[b], hw.MEM[c], ev, snap);
         if (usedCycles > 0) stepCycles = usedCycles;
       }
-    } else if (op === 'NEW') {
-      if (checkAddr(b)) {
-        ev.reads.push(b);
-        const ptr = heapNew(hw.MEM[b], ev);
-        if (ptr !== null) writeCell(a, ptr, ev);
-      }
-    } else if (op === 'FREE') {
-      if (checkAddr(a)) {
-        ev.reads.push(a);
-        heapFree(hw.MEM[a], ev);
-      }
     } else if (op === 'JMP') {
       ip = a;
     } else if (op === 'JAL') {
@@ -557,9 +364,6 @@ export function createVM(code, initMem, options = {}) {
     if (!hw.trap) hw.cycles += stepCycles;
     if (!hw.trap && (ip < 0 || ip > code.length)) {
       fail('TRAP_BAD_IP', `Instruction pointer ${ip} jumped outside valid code (0..${code.length})`);
-    }
-    if (!hw.trap && hw.enableRuntimeStackHeap && hw.MEM[1] < hw.MEM[0]) {
-      fail('TRAP_STACK_HEAP_COLLISION', `Stack-heap collision: SP (${hw.MEM[1]}) crossed HP (${hw.MEM[0]})`);
     }
     if (ip === code.length) hw.halted = true;
 
@@ -615,10 +419,10 @@ function parseMemOperand(operand) {
 export function createRiscvVM(asmText, initMem, options = {}) {
   const { instrs, labels } = parseRiscv(asmText);
   const ops = createHardware(initMem, options);
-  const { hw, drumAngle, fail, checkAddr, readTape, writeTape, rewindTape, dmaDrum, heapNew, heapFree, pushSnapshot, popSnapshot, resetHardware } = ops;
+  const { hw, drumAngle, fail, checkAddr, readTape, writeTape, rewindTape, dmaDrum, pushSnapshot, popSnapshot, resetHardware } = ops;
 
   const regs = new Int32Array(32);
-  let view = new DataView(hw.MEM.buffer);
+  const view = new DataView(hw.MEM.buffer);
   let ip = labels.main ?? 0;
   hw.halted = instrs.length === 0;
 
@@ -670,7 +474,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
       printVal: null,
       tape: null,
       drum: null,
-      gcTrace: null,
       cycles: 0,
       trap: null,
     };
@@ -689,7 +492,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
       if ((byteAddr & 3) !== 0) {
         fail('TRAP_OOB_MEM', `Unaligned lw byte address ${byteAddr}`);
       } else if (checkAddr(cell, false)) {
-        if (hw.MEM.buffer !== view.buffer) view = new DataView(hw.MEM.buffer);
         ev.reads.push(cell);
         if (rs1 !== 8) ev.deref = { ptrCell: null, targetAddr: cell, access: 'read' };
         regs[rd] = view.getInt32(byteAddr, true);
@@ -702,7 +504,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
       if ((byteAddr & 3) !== 0) {
         fail('TRAP_OOB_MEM', `Unaligned sw byte address ${byteAddr}`);
       } else if (checkAddr(cell, true)) {
-        if (hw.MEM.buffer !== view.buffer) view = new DataView(hw.MEM.buffer);
         ev.writes.push(cell);
         ev.prevValues[cell] = hw.MEM[cell];
         if (rs1 !== 8) ev.deref = { ptrCell: null, targetAddr: cell, access: 'write' };
@@ -760,12 +561,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
         const ramAddr = regs[10] >> 2;
         const usedCycles = dmaDrum(sys === 23, ramAddr, regs[11], regs[12], ev, snap);
         if (usedCycles > 0) stepCycles = usedCycles;
-      } else if (sys === 25) {
-        const ptr = heapNew(regs[10], ev);
-        if (ptr !== null) regs[10] = ptr;
-        if (hw.MEM.buffer !== view.buffer) view = new DataView(hw.MEM.buffer);
-      } else if (sys === 26) {
-        heapFree(regs[10], ev);
       }
     } else {
       fail('TRAP_ILLEGAL_OP', `Unknown RV32IM instruction '${op}'`);
@@ -773,9 +568,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
 
     regs[0] = 0;
     if (!hw.trap) hw.cycles += stepCycles;
-    if (!hw.trap && hw.enableRuntimeStackHeap && hw.MEM[1] < hw.MEM[0]) {
-      fail('TRAP_STACK_HEAP_COLLISION', `Stack-heap collision: SP (${hw.MEM[1]}) crossed HP (${hw.MEM[0]})`);
-    }
     if (ip >= instrs.length) hw.halted = true;
 
     ev.cycles = hw.cycles;
@@ -787,7 +579,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
   function stepBack() {
     const snap = popSnapshot();
     if (!snap) return false;
-    if (hw.MEM.buffer !== view.buffer) view = new DataView(hw.MEM.buffer);
     regs.set(snap.extra);
     ip = snap.ip;
     return true;
@@ -795,7 +586,6 @@ export function createRiscvVM(asmText, initMem, options = {}) {
 
   function reset() {
     resetHardware();
-    if (hw.MEM.buffer !== view.buffer) view = new DataView(hw.MEM.buffer);
     regs.fill(0);
     ip = labels.main ?? 0;
     hw.halted = instrs.length === 0;

@@ -257,14 +257,6 @@
         <option value="riscv">RV32IM Silicon</option>
       </select>
     </label>
-    <label>Heap
-      <select id="heapMode">
-        <option value="bump">bump (Stage 1)</option>
-        <option value="firstFit">firstFit (Stage 2)</option>
-        <option value="coalesceSplit">coalesceSplit (Stage 3A)</option>
-        <option value="semiSpaceGC">semiSpaceGC (Stage 4)</option>
-      </select>
-    </label>
     <label>RAM
       <select id="memSize">
         <option value="64">64 words</option>
@@ -273,7 +265,6 @@
       </select>
     </label>
     <label><input type="checkbox" id="protectRodata"> .rodata MMU</label>
-    <label><input type="checkbox" id="enableStackHeap"> Stack/Heap (HP/SP)</label>
   </header>
 
   <main class="layout">
@@ -326,8 +317,6 @@
             <span><i class="dot" style="background:var(--bss)"></i>.bss</span>
             <span><i class="dot" style="background:var(--linkage)"></i>linkage</span>
             <span><i class="dot" style="background:var(--scratch)"></i>scratch</span>
-            <span><i class="dot" style="background:var(--heap)"></i>heap</span>
-            <span><i class="dot" style="background:var(--stack)"></i>stack</span>
             <span><i class="dot" style="background:var(--read)"></i>read</span>
             <span><i class="dot" style="background:var(--write)"></i>write</span>
           </div>
@@ -361,7 +350,6 @@
           <div id="matrices"></div>
           <div id="tapes"></div>
           <div id="drum"></div>
-          <div id="gcTrace"></div>
         </div>
       </div>
     </section>

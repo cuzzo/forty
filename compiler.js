@@ -14,8 +14,6 @@ const CMP_RISCV = {
 
 const ALU_RISCV = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div' };
 
-const HEAP_STACK_KEYWORDS = new Set(['STACK', 'NEW', 'FREE', 'PTR']);
-
 export function tokenize(source) {
   const tokens = [];
   const re = /#[^\n]*|\n|[ \t\r]+|[A-Za-z_]\w*|\d+|==|!=|<=|>=|[-+*/=(),\[\]<>]|(\S)/g;
@@ -43,17 +41,11 @@ function cellLabelFor(name, i, dims) {
   return `${name}[${i}]`;
 }
 
-export function compile(source, options = {}) {
+export function compile(source, { memSize = 256 } = {}) {
   const tokens = tokenize(source);
-  const memSize = options.memSize ?? 256;
-  const heapMode = options.heapMode ?? 'bump';
-  const hasDynamicTokens = tokens.some((t) => HEAP_STACK_KEYWORDS.has(t.text));
-  const enableRuntimeStackHeap = options.enableRuntimeStackHeap ?? hasDynamicTokens;
-
   const lines = source.split('\n');
   const consts = new Map();
   const subs = Object.create(null);
-  const ptrRoots = [];
   const code = [];
   const compileEvents = [];
   const ipMap = [];
@@ -63,15 +55,9 @@ export function compile(source, options = {}) {
   }));
 
   let pos = 0;
-  let nextMem = enableRuntimeStackHeap ? 2 : 0;
+  let nextMem = 0;
   let sym = Object.create(null);
   let currentLine = 1;
-
-  if (enableRuntimeStackHeap) {
-    if (memSize < 2) throw new Error(`Memory size ${memSize} too small for HP/SP pointers`);
-    cells[0] = { addr: 0, role: 'sys_ptr', label: 'HP', aliases: [], symbol: 'HP', dims: null, initVal: 0 };
-    cells[1] = { addr: 1, role: 'sys_ptr', label: 'SP', aliases: [], symbol: 'SP', dims: null, initVal: memSize };
-  }
 
   function alloc(size = 1, role = 'scratch', label = '', symbol = null, dims = null) {
     if (nextMem + size > memSize) {
@@ -198,32 +184,6 @@ export function compile(source, options = {}) {
       eat(')');
       return e;
     }
-    if (t === 'STACK') {
-      if (!enableRuntimeStackHeap) throw new SyntaxError(`STACK requires runtime stack/heap (line ${currentLine})`);
-      eat('STACK');
-      eat('(');
-      const sz = valAddr(parseExpr());
-      eat(')');
-      emit('-', 1, 1, sz, 'SP -= sz');
-      const ptr = alloc(1, 'scratch', 'stack_ptr');
-      emit('MOV', ptr, 1, 0, 'ptr = SP');
-      return { mode: 'DIR', addr: ptr };
-    }
-    if (t === 'NEW') {
-      if (!enableRuntimeStackHeap) throw new SyntaxError(`NEW requires runtime stack/heap (line ${currentLine})`);
-      eat('NEW');
-      eat('(');
-      const sz = valAddr(parseExpr());
-      eat(')');
-      const ptr = alloc(1, 'scratch', 'heap_ptr');
-      if (heapMode === 'bump') {
-        emit('MOV', ptr, 0, 0, 'ptr = HP');
-        emit('+', 0, 0, sz, 'HP += sz');
-      } else {
-        emit('NEW', ptr, sz, 0, `NEW (${heapMode})`);
-      }
-      return { mode: 'DIR', addr: ptr };
-    }
     return parseLValue();
   }
 
@@ -268,16 +228,6 @@ export function compile(source, options = {}) {
     for (let i = 0; i < size; i++) {
       cells[target.addr + i].aliases.push(cellLabelFor(name, i, dims));
     }
-  }
-
-  function stmtPtr() {
-    eat('PTR');
-    const name = eat();
-    const v = getVar(name);
-    if (!ptrRoots.includes(v.addr)) ptrRoots.push(v.addr);
-    if (peek() !== '=') return;
-    eat('=');
-    emit('MOV', v.addr, valAddr(parseExpr()), 0);
   }
 
   function stmtRead() {
@@ -389,14 +339,11 @@ export function compile(source, options = {}) {
     }
     eat(')');
     const retSlot = alloc(1, 'linkage_ret', `${name}.ret`);
-    const spSlot = enableRuntimeStackHeap ? alloc(1, 'linkage_sp', `${name}.sp`) : null;
     const skipIdx = emit('JMP', 0, 0, 0, `Skip SUB ${name}`);
-    subs[name] = { entryIp: code.length, retSlot, spSlot, params };
-    if (spSlot !== null) emit('MOV', spSlot, 1, 0, 'Save caller SP');
+    subs[name] = { entryIp: code.length, retSlot, params };
     parseBlock();
     eat('END');
     sym = savedSym;
-    if (spSlot !== null) emit('MOV', 1, spSlot, 0, 'Auto-unwind SP');
     emit('JMP_IND', retSlot, 0, 0, `Return from ${name}`);
     patch(skipIdx, ['JMP', code.length, 0, 0], `Patch skip SUB ${name}`);
   }
@@ -418,17 +365,12 @@ export function compile(source, options = {}) {
   const STMT = {
     DIM: stmtDim,
     EQUIV: stmtEquiv,
-    PTR: stmtPtr,
     PRINT: () => { eat('PRINT'); emit('PRINT', valAddr(parseExpr()), 0, 0); },
     READ: stmtRead,
     WRITE: () => { eat('WRITE'); const u = parseUnitOpt(); emit('TAPE_WRITE', valAddr(parseExpr()), u, 0); },
     REWIND: () => { eat('REWIND'); emit('TAPE_REWIND', parseUnitOpt(), 0, 0); },
     DRUM_READ: stmtDrumRead,
     DRUM_WRITE: stmtDrumWrite,
-    FREE: () => {
-      if (!enableRuntimeStackHeap) throw new SyntaxError(`FREE requires runtime stack/heap (line ${currentLine})`);
-      eat('FREE'); eat('('); emit('FREE', valAddr(parseExpr()), 0, 0); eat(')');
-    },
     IF: stmtIf,
     DO: stmtDo,
     WHILE: stmtWhile,
@@ -456,12 +398,6 @@ export function compile(source, options = {}) {
     throw new SyntaxError(`Unexpected token '${tokens[pos].text}' at line ${tokens[pos].line}`);
   }
 
-  if (enableRuntimeStackHeap) {
-    initMem[0] = nextMem;
-    initMem[1] = memSize;
-    cells[0].initVal = nextMem;
-  }
-
   return {
     code,
     initMem,
@@ -470,12 +406,8 @@ export function compile(source, options = {}) {
       cells: cells.slice(0, nextMem),
       symbols: { ...sym },
       subs,
-      ptrRoots,
       compileEvents,
       ipMap,
-      heapStart: nextMem,
-      enableRuntimeStackHeap,
-      heapMode,
     },
   };
 }
@@ -525,10 +457,6 @@ export function emitRiscv(code, initMem, usedCells) {
       asm.push(`    lw a0, ${A}(s0)`, '    slli a0, a0, 2', `    lw a1, ${B}(s0)`, `    lw a2, ${C}(s0)`, '    li a7, 23', '    ecall');
     } else if (op === 'DRUM_WRITE') {
       asm.push(`    lw a0, ${A}(s0)`, '    slli a0, a0, 2', `    lw a1, ${B}(s0)`, `    lw a2, ${C}(s0)`, '    li a7, 24', '    ecall');
-    } else if (op === 'NEW') {
-      asm.push(`    lw a0, ${B}(s0)`, '    li a7, 25', '    ecall', `    sw a0, ${A}(s0)`);
-    } else if (op === 'FREE') {
-      asm.push(`    lw a0, ${A}(s0)`, '    li a7, 26', '    ecall');
     } else if (op in ALU_RISCV) {
       asm.push(`    lw t0, ${B}(s0)`, `    lw t1, ${C}(s0)`, `    ${ALU_RISCV[op]} t0, t0, t1`, `    sw t0, ${A}(s0)`);
     } else if (op in CMP_RISCV) {

@@ -6,12 +6,7 @@ import { DEMOS } from './visualizer.js';
 
 function runBoth(source, compileOpts = {}, vmOpts = {}) {
   const compiled = compile(source, compileOpts);
-  const fullVmOpts = {
-    debug: compiled.debug,
-    enableRuntimeStackHeap: compiled.debug.enableRuntimeStackHeap,
-    heapMode: compiled.debug.heapMode,
-    ...vmOpts,
-  };
+  const fullVmOpts = { debug: compiled.debug, ...vmOpts };
 
   const vm = createVM(compiled.code, compiled.initMem, fullVmOpts);
   vm.runSlice(10000);
@@ -78,8 +73,7 @@ test('Demo 5: Multi-tape stream filter, rewind, and EOF trap', () => {
   assert.deepEqual(vmState.stdout, [6, 14, 10]);
   assert.deepEqual(rvState.stdout, [6, 14, 10]);
 
-  const eofProg = 'READ X\nPRINT X';
-  const eofRun = runBoth(eofProg, { memSize: 16 }, { initTape: [] });
+  const eofRun = runBoth('READ X\nPRINT X', { memSize: 16 }, { initTape: [] });
   assert.equal(eofRun.vmState.trap?.code, 'TRAP_TAPE_EOF');
 });
 
@@ -91,70 +85,6 @@ test('Demo 6: Rotating drum DMA read/write and rotational latency', () => {
   const sec2Offset = 2 * 8;
   assert.deepEqual(Array.from(vmState.drum.subarray(sec2Offset, sec2Offset + 8)), [101, 102, 103, 104, 105, 106, 107, 108]);
   assert.deepEqual(Array.from(rvState.drum.subarray(sec2Offset, sec2Offset + 8)), [101, 102, 103, 104, 105, 106, 107, 108]);
-});
-
-test('Demo 7: Dangling stack pointer vs NEW heap persistence and collision trap', () => {
-  const stackRun = runBoth(DEMOS.danglingStack.code, { memSize: 128, enableRuntimeStackHeap: true });
-  assert.deepEqual(stackRun.vmState.stdout, [500, 900]);
-  assert.deepEqual(stackRun.rvState.stdout, [500, 900]);
-  assert.equal(stackRun.vmState.MEM[1], 128);
-
-  const heapSrc = DEMOS.danglingStack.code.replace('STACK(3)', 'NEW(3)');
-  const heapRun = runBoth(heapSrc, { memSize: 128, enableRuntimeStackHeap: true });
-  assert.deepEqual(heapRun.vmState.stdout, [500, 500]);
-  assert.deepEqual(heapRun.rvState.stdout, [500, 500]);
-
-  const collideSrc = 'P = STACK(60)\nP[0] = 1';
-  const collide = runBoth(collideSrc, { memSize: 64, enableRuntimeStackHeap: true });
-  assert.equal(collide.vmState.trap?.code, 'TRAP_STACK_HEAP_COLLISION');
-});
-
-test('Heap allocators: firstFit, coalesceSplit, and semiSpaceGC with time-travel', () => {
-  const src = [
-    'PTR A = NEW(4)',
-    'A[0] = 10',
-    'PTR B = NEW(4)',
-    'B[0] = 20',
-    'FREE(A)',
-    'FREE(B)',
-    'PTR C = NEW(6)',
-    'C[0] = 30',
-    'PRINT C[0]',
-  ].join('\n');
-
-  const firstFitFail = runBoth(src, { memSize: 32, enableRuntimeStackHeap: true, heapMode: 'firstFit' });
-  assert.equal(firstFitFail.vmState.trap?.code, 'TRAP_OOM');
-
-  const coalesced = runBoth(src, { memSize: 32, enableRuntimeStackHeap: true, heapMode: 'coalesceSplit' });
-  assert.deepEqual(coalesced.vmState.stdout, [30]);
-  assert.deepEqual(coalesced.rvState.stdout, [30]);
-
-  const gcSrc = [
-    'PTR KEEP = NEW(3)',
-    'KEEP[0] = 42',
-    'TEMP = NEW(8)',
-    'TEMP[0] = 99',
-    'PTR NEXT = NEW(4)',
-    'NEXT[0] = 77',
-    'PRINT KEEP[0]',
-    'PRINT NEXT[0]',
-  ].join('\n');
-  const compiled = compile(gcSrc, { memSize: 64, enableRuntimeStackHeap: true, heapMode: 'semiSpaceGC' });
-  const vm = createVM(compiled.code, compiled.initMem, { debug: compiled.debug });
-  const gcEvents = [];
-  while (!vm.getState().halted) {
-    const res = vm.step();
-    if (res.event?.gcTrace) gcEvents.push(...res.event.gcTrace);
-  }
-  assert.deepEqual(vm.getState().stdout, [42, 77]);
-  assert.ok(gcEvents.some((e) => e.kind === 'flip_semispace'));
-  assert.ok(gcEvents.some((e) => e.kind === 'copy_block'));
-
-  const totalSteps = vm.getState().steps;
-  vm.seek(2);
-  assert.equal(vm.getState().stdout.length, 0);
-  vm.seek(totalSteps);
-  assert.deepEqual(vm.getState().stdout, [42, 77]);
 });
 
 test('Signed 32-bit division truncates toward zero across VM and RISC-V', () => {
@@ -192,21 +122,7 @@ test('Time-travel seek, stepBack, reset, and compile backpatching events', () =>
   assert.equal(vm.getState().ip, 0);
 });
 
-test('DEMOS.heapGc triggers semi-space GC and WHILE/trap edge cases work', () => {
-  const compiled = compile(DEMOS.heapGc.code, {
-    memSize: DEMOS.heapGc.memSize,
-    enableRuntimeStackHeap: DEMOS.heapGc.stackHeap,
-    heapMode: DEMOS.heapGc.heapMode,
-  });
-  const vm = createVM(compiled.code, compiled.initMem, { debug: compiled.debug });
-  const traces = [];
-  while (!vm.getState().halted) {
-    const res = vm.step();
-    if (res.event?.gcTrace) traces.push(...res.event.gcTrace);
-  }
-  assert.deepEqual(vm.getState().stdout, [42, 777]);
-  assert.ok(traces.some((e) => e.kind === 'flip_semispace'));
-
+test('WHILE loops and hardware bounds traps work across VM and RISC-V', () => {
   const whileRun = runBoth('X = 3\nS = 0\nWHILE X > 0\n  S = S + X\n  X = X - 1\nEND\nPRINT S', { memSize: 32 });
   assert.deepEqual(whileRun.vmState.stdout, [6]);
   assert.deepEqual(whileRun.rvState.stdout, [6]);

@@ -5,8 +5,6 @@ export const DEMOS = {
   factorial: {
     name: '1. Iterative Factorial (DO + Backpatching)',
     memSize: 64,
-    stackHeap: false,
-    heapMode: 'bump',
     tape: [],
     code: [
       'N = 5',
@@ -20,8 +18,6 @@ export const DEMOS = {
   swap: {
     name: '2. Swap & Constant-Mutation Bug (.rodata MMU)',
     memSize: 64,
-    stackHeap: false,
-    heapMode: 'bump',
     tape: [],
     code: [
       'SUB SWAP(A, B)',
@@ -44,8 +40,6 @@ export const DEMOS = {
   saxpy: {
     name: '3. 2D Matrix SAXPY Column Slicing',
     memSize: 64,
-    stackHeap: false,
-    heapMode: 'bump',
     tape: [],
     code: [
       'DIM A(3, 2)',
@@ -74,8 +68,6 @@ export const DEMOS = {
   equiv: {
     name: '4. EQUIV Static Memory Overlay',
     memSize: 64,
-    stackHeap: false,
-    heapMode: 'bump',
     tape: [],
     code: [
       'DIM WORKSPACE(4)',
@@ -94,8 +86,6 @@ export const DEMOS = {
   tapeFilter: {
     name: '5. Multi-Tape Stream Filter & Rewind',
     memSize: 64,
-    stackHeap: false,
-    heapMode: 'bump',
     tape: [3, -1, 7, 0, 5],
     code: [
       'IS_EOF = 0',
@@ -124,8 +114,6 @@ export const DEMOS = {
   drum: {
     name: '6. Rotating Drum Matrix Paging',
     memSize: 64,
-    stackHeap: false,
-    heapMode: 'bump',
     tape: [],
     drumSeed: [1, 2, 3, 4, 5, 6, 7, 8],
     code: [
@@ -139,45 +127,6 @@ export const DEMOS = {
       'END',
       'DRUM_WRITE(0, 2, BUF)',
       'PRINT TILE[3, 1]',
-    ].join('\n'),
-  },
-  danglingStack: {
-    name: '7. Dangling Stack Pointer (STACK vs NEW)',
-    memSize: 128,
-    stackHeap: true,
-    heapMode: 'bump',
-    tape: [],
-    code: [
-      'SUB MAKE_BAD_VEC(VAL, OUT_PTR)',
-      '  P = STACK(3)',
-      '  P[0] = VAL',
-      '  P[1] = VAL * 10',
-      '  P[2] = VAL * 100',
-      '  OUT_PTR = P',
-      'END',
-      '',
-      'CALL MAKE_BAD_VEC(5, A)',
-      'PRINT A[2]',
-      '',
-      'CALL MAKE_BAD_VEC(9, B)',
-      'PRINT A[2]',
-    ].join('\n'),
-  },
-  heapGc: {
-    name: '8. Dynamic Heap & Semi-Space GC',
-    memSize: 128,
-    stackHeap: true,
-    heapMode: 'semiSpaceGC',
-    tape: [],
-    code: [
-      'PTR P = NEW(4)',
-      'P[0] = 42',
-      'JUNK = NEW(20)',
-      'JUNK[0] = 99',
-      'PTR Q = NEW(14)',
-      'Q[0] = 777',
-      'PRINT P[0]',
-      'PRINT Q[0]',
     ].join('\n'),
   },
 };
@@ -202,51 +151,6 @@ function el(tag, attrs = {}, ...children) {
 
 function fmtInstr(instr) {
   return `${instr[0].padEnd(10)} ${instr[1]}, ${instr[2]}, ${instr[3]}`;
-}
-
-function resolveCellRole(addr, state, debug) {
-  const staticCell = debug?.cells[addr];
-  if (staticCell && staticCell.role !== 'unused') return staticCell.role;
-  if (!debug?.enableRuntimeStackHeap) return 'unused';
-
-  const sp = state.MEM[1];
-  const hp = state.MEM[0];
-  if (addr >= sp) return 'stack';
-  if (state.semiSpace) {
-    const { fromSpace, spaceSize } = state.semiSpace;
-    if (addr >= fromSpace && addr < hp) return 'heap';
-    return 'unused';
-  }
-  if (addr >= debug.heapStart && addr < hp) return 'heap';
-  return 'unused';
-}
-
-function heapHeaderMap(state, debug) {
-  const map = new Map();
-  const mode = debug?.heapMode;
-  if (!mode || mode === 'bump') return map;
-
-  if (mode === 'firstFit' || mode === 'coalesceSplit') {
-    let h = debug.heapStart;
-    const limit = debug.enableRuntimeStackHeap ? state.MEM[1] : state.MEM.length;
-    while (h + 2 <= limit && state.MEM[h] > 0) {
-      const sz = state.MEM[h];
-      const used = state.MEM[h + 1] === 1;
-      map.set(h, used ? `sz:${sz}` : `free:${sz}`);
-      h += sz + 2;
-    }
-    return map;
-  }
-
-  if (mode === 'semiSpaceGC' && state.semiSpace) {
-    let h = state.semiSpace.fromSpace;
-    while (h < state.MEM[0] && state.MEM[h] > 0) {
-      const sz = state.MEM[h];
-      map.set(h, `len:${sz}`);
-      h += sz + 1;
-    }
-  }
-  return map;
 }
 
 function replayCompileEvents(events, limit) {
@@ -277,10 +181,8 @@ export function mountVisualizer(doc = document) {
   const dom = {
     demoSelect: doc.getElementById('demoSelect'),
     targetMode: doc.getElementById('targetMode'),
-    heapMode: doc.getElementById('heapMode'),
     memSize: doc.getElementById('memSize'),
     protectRodata: doc.getElementById('protectRodata'),
-    enableStackHeap: doc.getElementById('enableStackHeap'),
     source: doc.getElementById('source'),
     tapeInput: doc.getElementById('tapeInput'),
     sourceLines: doc.getElementById('sourceLines'),
@@ -308,7 +210,6 @@ export function mountVisualizer(doc = document) {
     matrices: doc.getElementById('matrices'),
     tapes: doc.getElementById('tapes'),
     drum: doc.getElementById('drum'),
-    gcTrace: doc.getElementById('gcTrace'),
   };
 
   for (const [key, demo] of Object.entries(DEMOS)) {
@@ -340,23 +241,14 @@ export function mountVisualizer(doc = document) {
   function buildProgram() {
     stopRun();
     const memSize = Number(dom.memSize.value);
-    const heapMode = dom.heapMode.value;
-    const enableRuntimeStackHeap = dom.enableStackHeap.checked;
     const protectRodata = dom.protectRodata.checked;
     const target = dom.targetMode.value;
     const demo = DEMOS[dom.demoSelect.value];
     const initDrum = demo?.drumSeed ? new Int32Array(demo.drumSeed) : null;
 
     try {
-      compiled = compile(dom.source.value, { memSize, enableRuntimeStackHeap, heapMode });
-      const vmOpts = {
-        debug: compiled.debug,
-        protectRodata,
-        enableRuntimeStackHeap: compiled.debug.enableRuntimeStackHeap,
-        heapMode,
-        initTape: parseTape(),
-        initDrum,
-      };
+      compiled = compile(dom.source.value, { memSize });
+      const vmOpts = { debug: compiled.debug, protectRodata, initTape: parseTape(), initDrum };
       if (target === 'riscv') {
         const asm = emitRiscv(compiled.code, compiled.initMem, compiled.usedCells);
         vm = createRiscvVM(asm, compiled.initMem, vmOpts);
@@ -380,8 +272,6 @@ export function mountVisualizer(doc = document) {
     const demo = DEMOS[key];
     dom.source.value = demo.code;
     dom.memSize.value = String(demo.memSize);
-    dom.enableStackHeap.checked = demo.stackHeap;
-    dom.heapMode.value = demo.heapMode;
     dom.tapeInput.value = demo.tape.join(', ');
     buildProgram();
   }
@@ -446,26 +336,17 @@ export function mountVisualizer(doc = document) {
     dom.ramGrid.replaceChildren();
     const reads = new Set(lastEvent?.reads ?? []);
     const writes = new Set(lastEvent?.writes ?? []);
-    const hdrs = heapHeaderMap(state, compiled.debug);
-    const showHeapStack = compiled.debug.enableRuntimeStackHeap;
-    const visibleLimit = showHeapStack
-      ? state.MEM.length
-      : Math.min(state.MEM.length, Math.max(compiled.usedCells + 8, 32));
+    const visibleLimit = Math.min(state.MEM.length, Math.max(compiled.usedCells + 8, 32));
 
     for (let addr = 0; addr < visibleLimit; addr++) {
       const info = compiled.debug.cells[addr];
-      const role = resolveCellRole(addr, state, compiled.debug);
+      const role = info?.role ?? 'unused';
       const flash = writes.has(addr) ? ' flash-write' : (reads.has(addr) ? ' flash-read' : '');
-      const badges = el('div', { class: 'ptr-badges' });
-      if (showHeapStack && addr === state.MEM[0]) badges.append(el('span', { class: 'badge hp', text: 'HP' }));
-      if (showHeapStack && addr === state.MEM[1]) badges.append(el('span', { class: 'badge sp', text: 'SP' }));
-      if (hdrs.has(addr)) badges.append(el('span', { class: 'badge hdr', text: hdrs.get(addr) }));
-
       const labelParts = [info?.label || ''];
       if (info?.aliases?.length) labelParts.push(`(${info.aliases.join(', ')})`);
 
       dom.ramGrid.append(el('div', { class: `cell${flash}`, 'data-addr': String(addr), 'data-role': role },
-        el('div', { class: 'cell-top' }, el('span', { text: `[${String(addr).padStart(2, '0')}]` }), badges),
+        el('div', { class: 'cell-top' }, el('span', { text: `[${String(addr).padStart(2, '0')}]` })),
         el('div', { class: 'cell-val', text: String(state.MEM[addr]) }),
         el('div', { class: 'cell-lbl', text: labelParts.filter(Boolean).join(' ') || role }),
       ));
@@ -567,18 +448,9 @@ export function mountVisualizer(doc = document) {
       const grid = el('div', { class: 'drum-grid' });
       for (let s = 0; s < 8; s++) {
         const cls = `drum-sec${s === state.drumAngle ? ' angle' : ''}${lastEvent?.drum?.sector === s ? ' active' : ''}`;
-        const preview = state.drum[s * 8];
-        grid.append(el('div', { class: cls, text: `S${s}:${preview}` }));
+        grid.append(el('div', { class: cls, text: `S${s}:${state.drum[s * 8]}` }));
       }
       dom.drum.append(grid);
-    }
-
-    dom.gcTrace.replaceChildren();
-    if (lastEvent?.gcTrace?.length) {
-      dom.gcTrace.append(el('div', { class: 'card-head', text: 'GC Micro-Trace' }));
-      const box = el('div', { class: 'stdout' });
-      box.textContent = lastEvent.gcTrace.map((g) => JSON.stringify(g)).join('\n');
-      dom.gcTrace.append(box);
     }
   }
 
@@ -640,10 +512,8 @@ export function mountVisualizer(doc = document) {
   dom.demoSelect.addEventListener('change', () => loadDemo(dom.demoSelect.value));
   dom.compileBtn.addEventListener('click', buildProgram);
   dom.targetMode.addEventListener('change', buildProgram);
-  dom.heapMode.addEventListener('change', buildProgram);
   dom.memSize.addEventListener('change', buildProgram);
   dom.protectRodata.addEventListener('change', buildProgram);
-  dom.enableStackHeap.addEventListener('change', buildProgram);
   dom.compileScrubber.addEventListener('input', () => renderCode(vm.getState()));
 
   dom.stepBtn.addEventListener('click', () => { stopRun(); stepOnce(); });
