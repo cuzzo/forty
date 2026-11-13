@@ -77,9 +77,11 @@ export function effect(prog, state) {
   if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
   if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
   if (op === 'DRUM_READ') {
+    const dst = c ? M[a] : a;
     const wait = waitCycles({ io: { sector: M[b], done: 0 }, cycles: state.cycles + 1 });
-    return `read drum sector ${val(b)} -> ${name(a)}..${name(a + SECTOR_WORDS - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
+    return `read drum sector ${val(b)} -> ${name(dst)}..${name(dst + SECTOR_WORDS - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
   }
+  if (!(op in ALU)) return `unknown opcode ${op}`;
   return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[b], M[c])} -> ${name(a)}`;
 }
 
@@ -95,7 +97,10 @@ export function describe([op, a, b, c], cells) {
   if (op === 'JAL') return `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`;
   if (op === 'JMP_IND') return `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`;
   if (op === 'JZ') return `JZ (jump if zero): if ${m(b)} is 0, go to instruction ${a}; else go to the next one`;
-  if (op === 'DRUM_READ') return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into ${m(a)} onward`;
+  if (op === 'DRUM_READ') {
+    const dst = c ? `the cell pointed to by ${m(a)}` : `${m(a)} onward`;
+    return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into ${dst}`;
+  }
   return `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${ALU[op] && /[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
 }
 
@@ -150,6 +155,7 @@ export function mount() {
   let last = { reads: [], writes: [] };
   let timer = null;
   let building = null;
+  let error = null;
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -214,9 +220,9 @@ export function mount() {
 
   function render(focusIp = null) {
     if (!prog) {
-      renderDrum(DEMOS[demoSel.value].drum ?? new Int32Array(SECTORS * SECTOR_WORDS), 0, null, 0);
-      statusBox.textContent = 'not compiled';
-      effectBox.textContent = '';
+      renderDrum(DEMOS[demoSel.value].drum ?? drumLayout(1), 0, null, 0);
+      statusBox.textContent = error ? 'error' : 'not compiled';
+      effectBox.textContent = error ?? '';
       outBox.textContent = '';
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
@@ -232,10 +238,12 @@ export function mount() {
     const reads = new Set(last.reads);
     const writes = new Set(last.writes);
 
-    statusBox.textContent = view
-      ? `compiling: ${building}/${prog.events.length}`
-      : `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
-    effectBox.textContent = view ? '' : effect(prog, s);
+    statusBox.textContent = error
+      ? 'error'
+      : (view
+        ? `compiling: ${building}/${prog.events.length}`
+        : `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`);
+    effectBox.textContent = error ?? (view ? '' : effect(prog, s));
     outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
@@ -308,7 +316,7 @@ export function mount() {
 
   function load(walk) {
     prog = compile(srcBox.value, MEM_SIZE);
-    vm = createVM(prog.initMem, DEMOS[demoSel.value].drum ?? []);
+    vm = createVM(prog.initMem, DEMOS[demoSel.value].drum ?? drumLayout(1));
     last = { reads: [], writes: [] };
     building = walk ? 0 : null;
   }
@@ -318,6 +326,18 @@ export function mount() {
     prog = null;
     vm = null;
     building = null;
+    error = null;
+  }
+
+  function act(fn) {
+    try {
+      error = null;
+      fn();
+    } catch (e) {
+      stop();
+      error = e.message;
+    }
+    render();
   }
 
   // Every cycle takes the same time, except that a word coming off the drum is slowed down to watch.
@@ -343,10 +363,11 @@ export function mount() {
 
   demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; unload(); render(); });
   srcBox.addEventListener('input', () => { unload(); render(); });
-  document.getElementById('compile').addEventListener('click', () => { stop(); load(true); render(); });
-  document.getElementById('step').addEventListener('click', () => { stop(); advance(); render(); });
+  document.getElementById('compile').addEventListener('click', () => { stop(); act(() => load(true)); });
+  document.getElementById('step').addEventListener('click', () => { stop(); act(advance); });
   document.getElementById('back').addEventListener('click', () => {
     stop();
+    error = null;
     if (building !== null) building = Math.max(0, building - 1);
     else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
     render();
@@ -356,9 +377,10 @@ export function mount() {
     if (timer) { stop(); render(); return; }
     if (vm && building === null && vm.getState().halted) vm.reset();
     const tick = () => {
-      if (!advance()) { stop(); render(); return; }
-      render();
-      timer = setTimeout(tick, delay());
+      act(() => {
+        if (!advance()) { stop(); return; }
+        timer = setTimeout(tick, delay());
+      });
     };
     timer = setTimeout(tick, 0);
   });

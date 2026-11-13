@@ -19,11 +19,17 @@ export function createVM(code, initMem) {
   let ip = 0;
   let halted = code.length === 0;
 
+  const at = (i) => {
+    if (i < 0 || i >= MEM.length) throw new RangeError(`Memory address out of bounds: ${i}`);
+    return i;
+  };
+
   function step() {
-    if (halted || ip >= code.length) {
+    if (halted || ip === code.length) {
       halted = true;
       return { pc, ip, halted, MEM, stdout, reads: [], writes: [] };
     }
+    if (ip < 0 || ip > code.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length });
     pc = ip;
     const [op, a, b, c] = code[ip++];
@@ -31,37 +37,42 @@ export function createVM(code, initMem) {
     const writes = [];
 
     if (op === 'MOV') {
-      reads.push(b); writes.push(a);
+      reads.push(at(b)); writes.push(at(a));
       MEM[a] = MEM[b];
     } else if (op === 'LOAD_IND') {
-      reads.push(b, MEM[b]); writes.push(a);
-      MEM[a] = MEM[MEM[b]];
+      const t = MEM[at(b)];
+      reads.push(b, at(t)); writes.push(at(a));
+      MEM[a] = MEM[t];
     } else if (op === 'STORE_IND') {
-      reads.push(a, b); writes.push(MEM[a]);
-      MEM[MEM[a]] = MEM[b];
+      const t = MEM[at(a)];
+      reads.push(a, at(b)); writes.push(at(t));
+      MEM[t] = MEM[b];
     } else if (op === 'PRINT') {
-      reads.push(a);
+      reads.push(at(a));
       stdout.push(MEM[a]);
     } else if (op === 'JMP') {
       ip = a;
     } else if (op === 'JAL') {
-      writes.push(a);
+      writes.push(at(a));
       MEM[a] = ip;
       ip = b;
     } else if (op === 'JMP_IND') {
-      reads.push(a);
+      reads.push(at(a));
       ip = MEM[a];
     } else if (op === 'JZ') {
-      reads.push(b);
+      reads.push(at(b));
       if (MEM[b] === 0) ip = a;
     } else if (op in ALU) {
-      reads.push(b, c); writes.push(a);
+      reads.push(at(b), at(c));
+      if (op === '/' && MEM[c] === 0) throw new Error('Division by zero');
+      writes.push(at(a));
       MEM[a] = ALU[op](MEM[b], MEM[c]);
     } else {
       throw new Error(`Unknown opcode: ${op}`);
     }
 
-    if (ip >= code.length) halted = true;
+    if (ip < 0 || ip > code.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
+    if (ip === code.length) halted = true;
     return { pc, ip, halted, MEM, stdout, reads, writes };
   }
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
-import { createVM, decode } from './vm.js';
+import { createVM, decode, encode } from './vm.js';
 import { DEMOS, MEM_SIZE, compileView, describe, effect, marks } from './visualizer.js';
 
 function run(source) {
@@ -145,4 +145,48 @@ test('v1 executes whatever is in memory, so overwriting code changes the program
   assert.deepEqual(vm.getState().stdout, []);
   assert.equal(vm.step().halted, true);
   assert.throws(() => { const bad = createVM([31 << 27]); bad.step(); }, /Unknown opcode: \?31/);
+});
+
+test('v1 isolates SUB scope, extends EQUIV, and guards stored-program bounds', () => {
+  const src = [
+    'I = 77',
+    'DIM G(2, 2)',
+    'SUB FILL(M, K)',
+    '  DIM M(2, 2)',
+    '  DO I = 0, 1',
+    '    M[I, 1] = (I + 1) * 10',
+    '  END',
+    '  DO K = 1, 3',
+    '    M[0, 0] = M[0, 0] + K',
+    '  END',
+    'END',
+    'OUT = 0',
+    'CALL FILL(G, OUT)',
+    'DIM SMALL(2)',
+    'EQUIV BIG(5) = SMALL',
+    'AFTER = 99',
+    'BIG[4] = 42',
+    'PRINT I',
+    'PRINT G[0, 0]',
+    'PRINT G[1, 1]',
+    'PRINT OUT',
+    'PRINT AFTER',
+    'PRINT BIG[4]',
+  ].join('\n');
+  assert.deepEqual(run(src).getState().stdout, [77, 6, 20, 4, 99, 42]);
+
+  assert.throws(() => compile('X = 3.14', MEM_SIZE), /Unexpected character '\.'/);
+  assert.throws(() => compile('X = 1\nEND\nPRINT X', MEM_SIZE), /Unexpected 'END'/);
+  assert.throws(() => compile('DIM A(200)', 128), /Program does not fit: 1 cells of code \+ data exceed 128 cells of RAM/);
+  assert.throws(() => compile('', 0), /Program does not fit: 1 cells of code \+ data exceed 0 cells of RAM/);
+  assert.throws(() => encode(['BOGUS', 0, 0, 0]), /Unknown opcode: BOGUS/);
+  assert.throws(() => encode(['MOV', 512, 0, 0]), /Operand out of 9-bit range/);
+  assert.throws(() => encode(['MOV', -1, 0, 0]), /Operand out of 9-bit range/);
+  assert.throws(() => run('X = 1 / 0'), /Division by zero/);
+  assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
+  const negJmp = createVM([encode(['JMP_IND', 1, 0, 0]), -1]);
+  assert.throws(() => negJmp.step(), /Instruction pointer out of bounds/);
+  const badWordProg = compile('X = 1', MEM_SIZE);
+  const badWordVm = createVM([31 << 27]);
+  assert.equal(effect(badWordProg, badWordVm.getState()), 'unknown opcode ?31');
 });

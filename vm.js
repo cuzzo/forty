@@ -551,7 +551,7 @@ export function createRiscvVM(asmText, initMem, options = {}) {
       } else if (sys === 10) {
         hw.halted = true;
       } else if (sys === 20) {
-        const res = readTape(regs[12], true, ev);
+        const res = readTape(regs[12], regs[13] !== 0, ev);
         if (res) { regs[10] = res.val; regs[11] = res.eof; }
       } else if (sys === 21) {
         writeTape(regs[11], regs[10], ev, snap);
@@ -579,7 +579,7 @@ export function createRiscvVM(asmText, initMem, options = {}) {
   function stepBack() {
     const snap = popSnapshot();
     if (!snap) return false;
-    regs.set(snap.extra);
+    regs.set(snap.regs);
     ip = snap.ip;
     return true;
   }

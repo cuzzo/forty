@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
-import { SECTOR_WORDS, createVM, decode, waitCycles } from './vm.js';
+import { SECTOR_WORDS, createVM, decode, encode, waitCycles } from './vm.js';
 import { DEMOS, MEM_SIZE, compileView, describe, drumLayout, effect, marks } from './visualizer.js';
 
 function run(source) {
@@ -203,4 +203,55 @@ test('v2 explains drum reads and computes MOD', () => {
   assert.match(describe(read, prog.cells), /^DRUM_READ \(read drum\): wait for drum sector M\[\d+\] S to reach the head, then copy its 8 words into M\[\d+\] B\[0\] onward$/);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [2]);
+});
+
+test('v2 supports indirect READ DRUM (SUB params and slices), isolates SUB scope, and checks bounds', () => {
+  const src = [
+    'I = 55',
+    'DIM BIG(16)',
+    'SUB LOAD(S, DST, K)',
+    '  DIM DST(4, 2)',
+    '  DO K = 0, 1',
+    '    READ DRUM S, DST',
+    '  END',
+    '  DO I = 0, 1',
+    '    DST[I, 1] = DST[I, 1] + 10',
+    '  END',
+    'END',
+    'STEP = 0',
+    'CALL LOAD(0, BIG, STEP)',
+    'READ DRUM 1, BIG[8]',
+    'DIM SMALL(2)',
+    'EQUIV OVER(5) = SMALL',
+    'KEEP = 77',
+    'OVER[4] = 33',
+    'PRINT I',
+    'PRINT STEP',
+    'PRINT BIG[0]',
+    'PRINT BIG[4]',
+    'PRINT BIG[15]',
+    'PRINT KEEP',
+    'PRINT OVER[4]',
+  ].join('\n');
+  const prog = compile(src, MEM_SIZE);
+  const indRead = prog.code.find((instr) => instr[0] === 'DRUM_READ' && instr[3] === 1);
+  assert.match(describe(indRead, prog.cells), /into the cell pointed to by/);
+  const vm = createVM(prog.initMem, drumLayout(1));
+  const effects = [];
+  while (!vm.getState().halted) {
+    effects.push(effect(prog, vm.getState()));
+    vm.step();
+  }
+  assert.ok(effects.some((e) => e.startsWith('read drum sector')));
+  assert.deepEqual(vm.getState().stdout, [55, 2, 1, 15, 16, 77, 33]);
+  assert.equal(effect(prog, createVM([31 << 27]).getState()), 'unknown opcode ?31');
+
+  assert.throws(() => compile('READ DRUM 0, SCALAR', MEM_SIZE), /needs at least 8 cells/);
+  assert.throws(() => compile('X = 10 % 3', MEM_SIZE), /Unexpected character '%'/);
+  assert.throws(() => compile('X = 1\nELSE\nX = 2', MEM_SIZE), /Unexpected 'ELSE'/);
+  assert.throws(() => encode(['DRUM_READ', 600, 0, 0]), /Operand out of 9-bit range/);
+  assert.throws(() => run('X = MOD(10, 0)'), /Division by zero/);
+  const oobDrum = compile('DIM B(8)\nREAD DRUM 0, B[125]', MEM_SIZE);
+  const oobVm = createVM(oobDrum.initMem, drumLayout(1));
+  assert.throws(() => { while (!oobVm.getState().halted) oobVm.step(); }, /Drum destination out of bounds/);
 });

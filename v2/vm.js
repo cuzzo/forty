@@ -30,7 +30,14 @@ export const waitCycles = ({ io, cycles }) => {
 };
 
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
-export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
+export function encode([op, a, b, c]) {
+  const id = OPS.indexOf(op);
+  if (id < 0) throw new Error(`Unknown opcode: ${op}`);
+  if ([a, b, c].some((x) => !Number.isInteger(x) || x < 0 || x > 511)) {
+    throw new RangeError(`Operand out of 9-bit range (0..511): ${op} ${a} ${b} ${c}`);
+  }
+  return (id << 27) | (a << 18) | (b << 9) | c;
+}
 export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 18) & 511, (word >>> 9) & 511, word & 511];
 
 export function createVM(initMem, drum = []) {
@@ -62,8 +69,17 @@ export function createVM(initMem, drum = []) {
     return view([], [addr]);
   }
 
+  const at = (i) => {
+    if (i < 0 || i >= MEM.length) throw new RangeError(`Memory address out of bounds: ${i}`);
+    return i;
+  };
+
   function step() {
-    if (halted) return view();
+    if (halted || (!io && ip === MEM.length)) {
+      halted = true;
+      return view();
+    }
+    if (!io && (ip < 0 || ip > MEM.length)) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length, cycles, waited, io });
     if (io) return drumCycle();
     pc = ip;
@@ -75,42 +91,52 @@ export function createVM(initMem, drum = []) {
     if (op === 'HALT') {
       halted = true;
     } else if (op === 'MOV') {
-      reads.push(b); writes.push(a);
+      reads.push(at(b)); writes.push(at(a));
       MEM[a] = MEM[b];
     } else if (op === 'LOAD_IND') {
-      reads.push(b, MEM[b]); writes.push(a);
-      MEM[a] = MEM[MEM[b]];
+      const t = MEM[at(b)];
+      reads.push(b, at(t)); writes.push(at(a));
+      MEM[a] = MEM[t];
     } else if (op === 'STORE_IND') {
-      reads.push(a, b); writes.push(MEM[a]);
-      MEM[MEM[a]] = MEM[b];
+      const t = MEM[at(a)];
+      reads.push(a, at(b)); writes.push(at(t));
+      MEM[t] = MEM[b];
     } else if (op === 'PRINT') {
-      reads.push(a);
+      reads.push(at(a));
       stdout.push(MEM[a]);
     } else if (op === 'JMP') {
       ip = a;
     } else if (op === 'JAL') {
-      writes.push(a);
+      writes.push(at(a));
       MEM[a] = ip;
       ip = b;
     } else if (op === 'JMP_IND') {
-      reads.push(a);
+      reads.push(at(a));
       ip = MEM[a];
     } else if (op === 'JZ') {
-      reads.push(b);
+      reads.push(at(b));
       if (MEM[b] === 0) ip = a;
     } else if (op === 'DRUM_READ') {
-      reads.push(b);
+      reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { sector: MEM[b], addr: a, done: 0 };
+      const target = c ? MEM[at(a)] : a;
+      if (c) reads.push(a);
+      if (target < 0 || target + SECTOR_WORDS > MEM.length) {
+        throw new RangeError(`Drum destination out of bounds: ${target}..${target + SECTOR_WORDS - 1}`);
+      }
+      io = { sector: MEM[b], addr: target, done: 0 };
       ip = pc;
     } else if (op in ALU) {
-      reads.push(b, c); writes.push(a);
+      reads.push(at(b), at(c));
+      if ((op === '/' || op === '%') && MEM[c] === 0) throw new Error('Division by zero');
+      writes.push(at(a));
       MEM[a] = ALU[op](MEM[b], MEM[c]);
     } else {
       throw new Error(`Unknown opcode: ${op}`);
     }
 
-    if (ip >= MEM.length) halted = true;
+    if (ip < 0 || ip > MEM.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
+    if (ip === MEM.length) halted = true;
     return view(reads, writes);
   }
 

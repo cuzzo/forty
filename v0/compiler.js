@@ -3,12 +3,13 @@ const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
 const PREC = { '==': 1, '!=': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '+': 2, '-': 2, '*': 3, '/': 3 };
 
 export function tokenize(source) {
-  const re = /#[^\n]*|\n|[A-Za-z_]\w*|\d+|==|!=|<=|>=|[-+*/=(),\[\]<>]/g;
+  const re = /#[^\n]*|\n|[ \t\r]+|[A-Za-z_]\w*|\d+|==|!=|<=|>=|[-+*/=(),\[\]<>]|(\S)/g;
   const tokens = [];
   let line = 1;
   for (const m of source.matchAll(re)) {
+    if (m[1]) throw new SyntaxError(`Unexpected character '${m[0]}' at line ${line}`);
     if (m[0] === '\n') { line++; continue; }
-    if (m[0][0] !== '#') tokens.push({ text: m[0], line });
+    if (!'# \t\r'.includes(m[0][0])) tokens.push({ text: m[0], line });
   }
   return tokens;
 }
@@ -24,9 +25,11 @@ export function compile(source, memSize = 256) {
   const ipMap = [];
   const events = [];
   let sym = Object.create(null);
+  let currentSub = null;
   let pos = 0;
   let nextMem = 0;
   let line = 1;
+  const scoped = (name) => (currentSub ? `${currentSub}.${name}` : name);
 
   function touch(addr, size = 1) {
     for (let i = 0; i < size; i++) refs[addr + i].add(line);
@@ -67,7 +70,7 @@ export function compile(source, memSize = 256) {
   }
 
   function getVar(name) {
-    if (!(name in sym)) sym[name] = { addr: alloc(1, 'bss', name), dims: null, isRef: false };
+    if (!(name in sym)) sym[name] = { addr: alloc(1, 'bss', scoped(name)), dims: null, isRef: false };
     touch(sym[name].addr, span(sym[name].dims));
     return sym[name];
   }
@@ -111,6 +114,7 @@ export function compile(source, memSize = 256) {
     eat('[');
     let idx = valAddr(parseExpr());
     if (peek() === ',') {
+      if (!dims || dims.length < 2) throw new SyntaxError(`2D index on non-2D variable '${tok}'`);
       eat(',');
       const cOff = alloc(1);
       emit('*', cOff, valAddr(parseExpr()), defConst(dims[0]));
@@ -120,7 +124,7 @@ export function compile(source, memSize = 256) {
     }
     eat(']');
     const ptr = alloc(1);
-    emit('+', ptr, dims ? defConst(baseAddr) : baseAddr, idx);
+    emit('+', ptr, isRef ? baseAddr : defConst(baseAddr), idx);
     return { mode: 'IND', addr: ptr };
   }
 
@@ -156,13 +160,25 @@ export function compile(source, memSize = 256) {
       if (tok === 'DIM') {
         eat('DIM');
         const { name, dims } = parseDecl();
-        sym[name] = { addr: alloc(span(dims), 'bss', name), dims, isRef: false };
+        if (sym[name]?.isRef) { sym[name].dims = dims; touch(sym[name].addr); }
+        else sym[name] = { addr: alloc(span(dims), 'bss', scoped(name)), dims, isRef: false };
       } else if (tok === 'EQUIV') {
         eat('EQUIV');
         const { name, dims } = parseDecl();
         eat('=');
-        sym[name] = { addr: sym[eat()].addr, dims, isRef: false };
-        touch(sym[name].addr, span(dims));
+        const tName = eat();
+        const target = sym[tName];
+        if (!target || target.isRef) throw new SyntaxError(`Invalid EQUIV target '${tName}'`);
+        const size = span(dims);
+        const end = target.addr + size;
+        if (end > memSize) throw new Error(`RAM overflow (${memSize} cells)`);
+        if (end > nextMem) {
+          const prev = nextMem;
+          alloc(end - prev, 'bss', '');
+          for (let a = prev; a < end; a++) cells[a].label = `${scoped(name)}[${a - target.addr}]`;
+        }
+        sym[name] = { addr: target.addr, dims, isRef: false };
+        touch(target.addr, size);
       } else if (tok === 'PRINT') {
         eat('PRINT');
         emit('PRINT', valAddr(parseExpr()), 0, 0);
@@ -184,26 +200,36 @@ export function compile(source, memSize = 256) {
         eat('END');
       } else if (tok === 'DO') {
         eat('DO');
-        const vAddr = getVar(eat()).addr;
+        const v = getVar(eat());
         eat('=');
         const start = valAddr(parseExpr());
         eat(',');
         const stop = valAddr(parseExpr());
-        emit('MOV', vAddr, start, 0);
+        emit(v.isRef ? 'STORE_IND' : 'MOV', v.addr, start, 0);
         const loopTop = code.length;
+        const cur = v.isRef ? valAddr({ mode: 'IND', addr: v.addr }) : v.addr;
         const cmpTmp = alloc(1);
-        emit('<=', cmpTmp, vAddr, stop);
+        emit('<=', cmpTmp, cur, stop);
         const exitIdx = emit('JZ', 0, cmpTmp, 0);
         parseBlock();
         eat('END');
-        emit('+', vAddr, vAddr, defConst(1));
+        if (v.isRef) {
+          const nxt = valAddr({ mode: 'IND', addr: v.addr });
+          emit('+', nxt, nxt, defConst(1));
+          emit('STORE_IND', v.addr, nxt, 0);
+        } else {
+          emit('+', v.addr, v.addr, defConst(1));
+        }
         emit('JMP', loopTop, 0, 0);
         patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
       } else if (tok === 'SUB') {
         eat('SUB');
         const name = eat();
         eat('(');
-        const savedSym = { ...sym };
+        const savedSym = sym;
+        const savedSub = currentSub;
+        sym = Object.create(null);
+        currentSub = name;
         const params = [];
         while (peek() !== ')') {
           const p = eat();
@@ -219,6 +245,7 @@ export function compile(source, memSize = 256) {
         parseBlock();
         eat('END');
         sym = savedSym;
+        currentSub = savedSub;
         emit('JMP_IND', retSlot, 0, 0);
         patch(skipIdx, ['JMP', code.length, 0, 0]);
       } else if (tok === 'CALL') {
@@ -226,6 +253,7 @@ export function compile(source, memSize = 256) {
         const name = eat();
         eat('(');
         const sub = subs[name];
+        if (!sub) throw new SyntaxError(`Undefined subroutine '${name}'`);
         for (let i = 0; i < sub.params.length; i++) {
           if (i > 0) eat(',');
           touch(sub.params[i]);
@@ -244,5 +272,6 @@ export function compile(source, memSize = 256) {
   }
 
   parseBlock();
+  if (pos < tokens.length) throw new SyntaxError(`Unexpected '${tokens[pos].text}' at line ${tokens[pos].line}`);
   return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), cellLines: refs.slice(0, nextMem), sym, subs, ipMap, events };
 }

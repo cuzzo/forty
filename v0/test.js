@@ -119,3 +119,43 @@ test('v0 replays compilation one memory cell or instruction at a time', () => {
   assert.deepEqual(compileView(fact, k + 1).code[4], ['JZ', 9, 5, 0]);
   assert.equal(compileView(fact, k + 1).newIp, 4);
 });
+
+test('v0 isolates SUB scope, supports 2D/DO ref params, extends EQUIV, and rejects invalid programs/faults', () => {
+  const src = [
+    'I = 77',
+    'DIM G(2, 2)',
+    'SUB FILL(M, K)',
+    '  DIM M(2, 2)',
+    '  DO I = 0, 1',
+    '    M[I, 1] = (I + 1) * 10',
+    '  END',
+    '  DO K = 1, 3',
+    '    M[0, 0] = M[0, 0] + K',
+    '  END',
+    'END',
+    'OUT = 0',
+    'CALL FILL(G, OUT)',
+    'DIM SMALL(2)',
+    'EQUIV BIG(5) = SMALL',
+    'AFTER = 99',
+    'BIG[4] = 42',
+    'PRINT I',
+    'PRINT G[0, 0]',
+    'PRINT G[1, 1]',
+    'PRINT OUT',
+    'PRINT AFTER',
+    'PRINT BIG[4]',
+  ].join('\n');
+  const prog = compile(src, 64);
+  assert.equal(compileView(prog, prog.events.length).cells, prog.usedCells);
+  assert.deepEqual(run(src).getState().stdout, [77, 6, 20, 4, 99, 42]);
+
+  assert.throws(() => compile('X = 3.14', 16), /Unexpected character '\.'/);
+  assert.throws(() => compile('X = 1\nEND\nPRINT X', 16), /Unexpected 'END'/);
+  assert.throws(() => compile('CALL NOPE()', 16), /Undefined subroutine 'NOPE'/);
+  assert.throws(() => compile('EQUIV A(2) = MISSING', 16), /Invalid EQUIV target 'MISSING'/);
+  assert.throws(() => compile('X = 1\nY = X[0, 0]', 16), /2D index on non-2D variable 'X'/);
+  assert.throws(() => run('X = 1 / 0'), /Division by zero/);
+  assert.throws(() => run('DIM A(2)\nA[99] = 1'), /Memory address out of bounds/);
+  assert.throws(() => { const bad = createVM([['JMP', -1, 0, 0]], new Int32Array(4)); bad.step(); }, /Instruction pointer out of bounds/);
+});

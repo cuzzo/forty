@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
-import { GAP, RECORD_SPAN, SECTOR_WORDS, createVM, decode, headAt, ioWait } from './vm.js';
+import { GAP, RECORD_SPAN, SECTOR_WORDS, createVM, decode, encode, headAt, ioWait } from './vm.js';
 import { DEMOS, MEM_SIZE, TAPE_DATA, compileView, describe, drumLayout, effect, marks } from './visualizer.js';
 
 function run(source) {
@@ -251,4 +251,52 @@ test('v3 stops at the end of the tape and rejects an unknown device', () => {
   const { vm } = runTape('DIM R(8)\nDO K = 1, 65\n  READ TAPE R\nEND');
   assert.throws(() => { while (!vm.getState().halted) vm.step(); }, /End of tape/);
   assert.throws(() => compile('DIM R(8)\nREAD DISK R', MEM_SIZE), /Expected DRUM or TAPE, got 'DISK'/);
+});
+
+test('v3 supports indirect READ TAPE/DRUM, isolates SUB scope, and checks bounds', () => {
+  const src = [
+    'I = 44',
+    'DIM BIG(16)',
+    'SUB PULL(DST, K)',
+    '  DIM DST(4, 2)',
+    '  DO K = 0, 0',
+    '    READ TAPE DST',
+    '  END',
+    '  DO I = 0, 1',
+    '    DST[I, 1] = DST[I, 1] + 10',
+    '  END',
+    'END',
+    'STEP = 0',
+    'CALL PULL(BIG, STEP)',
+    'READ DRUM 1, BIG[8]',
+    'DIM SMALL(2)',
+    'EQUIV OVER(5) = SMALL',
+    'KEEP = 77',
+    'OVER[4] = 33',
+    'PRINT I',
+    'PRINT STEP',
+    'PRINT BIG[0]',
+    'PRINT BIG[4]',
+    'PRINT BIG[15]',
+    'PRINT KEEP',
+    'PRINT OVER[4]',
+  ].join('\n');
+  const prog = compile(src, MEM_SIZE);
+  const indTape = prog.code.find((instr) => instr[0] === 'TAPE_READ' && instr[3] === 1);
+  assert.match(describe(indTape, prog.cells), /into the cell pointed to by/);
+  const vm = createVM(prog.initMem, drumLayout(1), TAPE_DATA);
+  const effects = [];
+  while (!vm.getState().halted) {
+    effects.push(effect(prog, vm.getState()));
+    vm.step();
+  }
+  assert.ok(effects.some((e) => e.startsWith('read tape record')));
+  assert.deepEqual(vm.getState().stdout, [44, 1, 1, 15, 16, 77, 33]);
+  assert.equal(effect(prog, createVM([31 << 27]).getState()), 'unknown opcode ?31');
+
+  assert.throws(() => compile('READ TAPE SCALAR', MEM_SIZE), /needs at least 8 cells/);
+  assert.throws(() => encode(['TAPE_READ', 512, 0, 0]), /Operand out of 9-bit range/);
+  const oobTape = compile('DIM B(8)\nREAD TAPE B[125]', MEM_SIZE);
+  const oobVm = createVM(oobTape.initMem, [], TAPE_DATA);
+  assert.throws(() => { while (!oobVm.getState().halted) oobVm.step(); }, /Tape destination out of bounds/);
 });

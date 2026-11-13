@@ -57,6 +57,7 @@ export function compile(source, { memSize = 256 } = {}) {
   let pos = 0;
   let nextMem = 0;
   let sym = Object.create(null);
+  let currentSub = null;
   let currentLine = 1;
 
   function alloc(size = 1, role = 'scratch', label = '', symbol = null, dims = null) {
@@ -101,7 +102,8 @@ export function compile(source, { memSize = 256 } = {}) {
 
   function getVar(name) {
     if (name in sym) return sym[name];
-    const addr = alloc(1, 'bss', name, name, null);
+    const label = currentSub ? `${currentSub}.${name}` : name;
+    const addr = alloc(1, 'bss', label, label, null);
     sym[name] = { addr, dims: null, isRef: false };
     return sym[name];
   }
@@ -165,7 +167,7 @@ export function compile(source, { memSize = 256 } = {}) {
     }
     eat(']');
     const ptr = alloc(1, 'scratch', `&${tok}_elem`);
-    emit('+', ptr, dims ? defConst(baseAddr) : baseAddr, idx);
+    emit('+', ptr, isRef ? baseAddr : defConst(baseAddr), idx);
     return { mode: 'IND', addr: ptr };
   }
 
@@ -210,8 +212,13 @@ export function compile(source, { memSize = 256 } = {}) {
   function stmtDim() {
     eat('DIM');
     const { name, dims } = parseDecl();
+    if (sym[name]?.isRef) {
+      sym[name].dims = dims;
+      return;
+    }
     const size = dims ? dims[0] * (dims[1] ?? 1) : 1;
-    const addr = alloc(size, 'bss', name, name, dims);
+    const label = currentSub ? `${currentSub}.${name}` : name;
+    const addr = alloc(size, 'bss', label, label, dims);
     sym[name] = { addr, dims, isRef: false };
   }
 
@@ -222,10 +229,20 @@ export function compile(source, { memSize = 256 } = {}) {
     const targetName = eat();
     const target = sym[targetName];
     if (!target) throw new SyntaxError(`Undefined symbol '${targetName}' in EQUIV (line ${currentLine})`);
+    if (target.isRef) throw new SyntaxError(`Cannot EQUIV onto reference parameter '${targetName}' (line ${currentLine})`);
     const size = dims ? dims[0] * (dims[1] ?? 1) : 1;
-    if (target.addr + size > memSize) throw new Error(`EQUIV '${name}' exceeds memory bounds`);
+    const end = target.addr + size;
+    if (end > memSize) throw new Error(`Compile-time static RAM overflow (${memSize} cells)`);
+    const prevEnd = nextMem;
+    if (end > nextMem) {
+      const label = currentSub ? `${currentSub}.${name}` : name;
+      alloc(end - nextMem, 'bss', '', label, dims);
+      for (let addr = prevEnd; addr < end; addr++) {
+        cells[addr].label = cellLabelFor(label, addr - target.addr, dims);
+      }
+    }
     sym[name] = { addr: target.addr, dims, isRef: false };
-    for (let i = 0; i < size; i++) {
+    for (let i = 0; i < size && target.addr + i < prevEnd; i++) {
       cells[target.addr + i].aliases.push(cellLabelFor(name, i, dims));
     }
   }
@@ -296,19 +313,26 @@ export function compile(source, { memSize = 256 } = {}) {
 
   function stmtDo() {
     eat('DO');
-    const vAddr = getVar(eat()).addr;
+    const v = getVar(eat());
     eat('=');
     const start = valAddr(parseExpr());
     eat(',');
     const stop = valAddr(parseExpr());
-    emit('MOV', vAddr, start, 0);
+    emit(v.isRef ? 'STORE_IND' : 'MOV', v.addr, start, 0);
     const loopTop = code.length;
+    const curAddr = v.isRef ? valAddr({ mode: 'IND', addr: v.addr }) : v.addr;
     const cmpTmp = alloc(1, 'scratch', 'do_cmp');
-    emit('<=', cmpTmp, vAddr, stop);
+    emit('<=', cmpTmp, curAddr, stop);
     const exitIdx = emit('JZ', 0, cmpTmp, 0, 'DO exit placeholder');
     parseBlock();
     eat('END');
-    emit('+', vAddr, vAddr, defConst(1));
+    if (v.isRef) {
+      const nxt = valAddr({ mode: 'IND', addr: v.addr });
+      emit('+', nxt, nxt, defConst(1));
+      emit('STORE_IND', v.addr, nxt, 0);
+    } else {
+      emit('+', v.addr, v.addr, defConst(1));
+    }
     emit('JMP', loopTop, 0, 0);
     patch(exitIdx, ['JZ', code.length, cmpTmp, 0], 'Patch DO exit');
   }
@@ -328,7 +352,10 @@ export function compile(source, { memSize = 256 } = {}) {
     eat('SUB');
     const name = eat();
     eat('(');
-    const savedSym = { ...sym };
+    const savedSym = sym;
+    const savedSub = currentSub;
+    sym = Object.create(null);
+    currentSub = name;
     const params = [];
     while (peek() !== ')') {
       const p = eat();
@@ -344,6 +371,7 @@ export function compile(source, { memSize = 256 } = {}) {
     parseBlock();
     eat('END');
     sym = savedSym;
+    currentSub = savedSub;
     emit('JMP_IND', retSlot, 0, 0, `Return from ${name}`);
     patch(skipIdx, ['JMP', code.length, 0, 0], `Patch skip SUB ${name}`);
   }
@@ -447,7 +475,7 @@ export function emitRiscv(code, initMem, usedCells) {
     } else if (op === 'PRINT') {
       asm.push(`    lw a0, ${A}(s0)`, '    li a7, 1', '    ecall', '    li a0, 10', '    li a7, 11', '    ecall');
     } else if (op === 'TAPE_READ') {
-      asm.push(`    lw a2, ${B}(s0)`, '    li a7, 20', '    ecall', `    sw a0, ${A}(s0)`);
+      asm.push(`    lw a2, ${B}(s0)`, `    li a3, ${c >= 0 ? 1 : 0}`, '    li a7, 20', '    ecall', `    sw a0, ${A}(s0)`);
       if (c >= 0) asm.push(`    sw a1, ${C}(s0)`);
     } else if (op === 'TAPE_WRITE') {
       asm.push(`    lw a0, ${A}(s0)`, `    lw a1, ${B}(s0)`, '    li a7, 21', '    ecall');

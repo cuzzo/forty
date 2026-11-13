@@ -75,6 +75,7 @@ test('Demo 5: Multi-tape stream filter, rewind, and EOF trap', () => {
 
   const eofRun = runBoth('READ X\nPRINT X', { memSize: 16 }, { initTape: [] });
   assert.equal(eofRun.vmState.trap?.code, 'TRAP_TAPE_EOF');
+  assert.equal(eofRun.rvState.trap?.code, 'TRAP_TAPE_EOF');
 });
 
 test('Demo 6: Rotating drum DMA read/write and rotational latency', () => {
@@ -120,6 +121,18 @@ test('Time-travel seek, stepBack, reset, and compile backpatching events', () =>
   vm.reset();
   assert.equal(vm.getState().steps, 0);
   assert.equal(vm.getState().ip, 0);
+
+  const asm = emitRiscv(compiled.code, compiled.initMem, compiled.usedCells);
+  const rv = createRiscvVM(asm, compiled.initMem, { debug: compiled.debug });
+  rv.runSlice(5000);
+  const rvDone = rv.getState().steps;
+  assert.deepEqual(rv.getState().stdout, [120]);
+  rv.seek(4);
+  assert.equal(rv.getState().steps, 4);
+  assert.equal(rv.stepBack(), true);
+  assert.equal(rv.getState().steps, 3);
+  rv.seek(rvDone);
+  assert.deepEqual(rv.getState().stdout, [120]);
 });
 
 test('WHILE loops and hardware bounds traps work across VM and RISC-V', () => {
@@ -134,4 +147,35 @@ test('WHILE loops and hardware bounds traps work across VM and RISC-V', () => {
   const badMem = runBoth('DIM A(2)\nA[500] = 1', { memSize: 32 });
   assert.equal(badMem.vmState.trap?.code, 'TRAP_OOB_MEM');
   assert.equal(badMem.rvState.trap?.code, 'TRAP_OOB_MEM');
+});
+
+test('SUB isolates local scope, dimensions 2D ref params, and EQUIV reserves tail cells', () => {
+  const src = [
+    'I = 77',
+    'DIM G(2, 2)',
+    'SUB FILL(M, K)',
+    '  DIM M(2, 2)',
+    '  DO I = 0, 1',
+    '    M[I, 1] = (I + 1) * 10',
+    '  END',
+    '  DO K = 1, 3',
+    '    M[0, 0] = M[0, 0] + K',
+    '  END',
+    'END',
+    'OUT = 0',
+    'CALL FILL(G, OUT)',
+    'PRINT I',
+    'PRINT G[0, 0]',
+    'PRINT G[1, 1]',
+    'PRINT OUT',
+    'DIM SMALL(2)',
+    'EQUIV BIG(5) = SMALL',
+    'AFTER = 99',
+    'BIG[4] = 42',
+    'PRINT AFTER',
+    'PRINT BIG[4]',
+  ].join('\n');
+  const { vmState, rvState } = runBoth(src, { memSize: 64 });
+  assert.deepEqual(vmState.stdout, [77, 6, 20, 4, 99, 42]);
+  assert.deepEqual(rvState.stdout, [77, 6, 20, 4, 99, 42]);
 });

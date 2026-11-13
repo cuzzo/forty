@@ -48,6 +48,7 @@ export function effect(prog, state) {
   if (op === 'JAL') return `call ${b}, return to ${state.ip + 1} -> ${name(a)}`;
   if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
   if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
+  if (!(op in ALU)) return `unknown opcode ${op}`;
   return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[b], M[c])} -> ${name(a)}`;
 }
 
@@ -114,6 +115,7 @@ export function mount() {
   let last = { reads: [], writes: [] };
   let timer = null;
   let building = null;
+  let error = null;
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -161,8 +163,8 @@ export function mount() {
 
   function render(focusIp = null) {
     if (!prog) {
-      statusBox.textContent = 'not compiled';
-      effectBox.textContent = '';
+      statusBox.textContent = error ? 'error' : 'not compiled';
+      effectBox.textContent = error ?? '';
       outBox.textContent = '';
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
@@ -178,10 +180,12 @@ export function mount() {
     const reads = new Set(last.reads);
     const writes = new Set(last.writes);
 
-    statusBox.textContent = view
-      ? `compiling: ${building}/${prog.events.length}`
-      : `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
-    effectBox.textContent = view ? '' : effect(prog, s);
+    statusBox.textContent = error
+      ? 'error'
+      : (view
+        ? `compiling: ${building}/${prog.events.length}`
+        : `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`);
+    effectBox.textContent = error ?? (view ? '' : effect(prog, s));
     outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
@@ -246,6 +250,18 @@ export function mount() {
     prog = null;
     vm = null;
     building = null;
+    error = null;
+  }
+
+  function act(fn) {
+    try {
+      error = null;
+      fn();
+    } catch (e) {
+      stop();
+      error = e.message;
+    }
+    render();
   }
 
   // One compile event while walking the compile, else one instruction; false once halted.
@@ -263,10 +279,11 @@ export function mount() {
 
   demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; unload(); render(); });
   srcBox.addEventListener('input', () => { unload(); render(); });
-  document.getElementById('compile').addEventListener('click', () => { stop(); load(true); render(); });
-  document.getElementById('step').addEventListener('click', () => { stop(); advance(); render(); });
+  document.getElementById('compile').addEventListener('click', () => { stop(); act(() => load(true)); });
+  document.getElementById('step').addEventListener('click', () => { stop(); act(advance); });
   document.getElementById('back').addEventListener('click', () => {
     stop();
+    error = null;
     if (building !== null) building = Math.max(0, building - 1);
     else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
     render();
@@ -275,10 +292,7 @@ export function mount() {
   document.getElementById('run').addEventListener('click', () => {
     if (timer) { stop(); render(); return; }
     if (vm && building === null && vm.getState().halted) vm.reset();
-    timer = setInterval(() => {
-      if (!advance()) stop();
-      render();
-    }, 80);
+    timer = setInterval(() => act(() => { if (!advance()) stop(); }), 80);
   });
   srcBox.addEventListener('scroll', () => { linesBox.scrollTop = srcBox.scrollTop; drawArrow(); });
   codeBox.addEventListener('scroll', drawArrow);
