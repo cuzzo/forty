@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test.js v0/test.js v1/test.js v2/test.js"
+    "test": "node --test test.js v0/test.js v1/test.js v2/test.js v3/test.js"
   }
 }
