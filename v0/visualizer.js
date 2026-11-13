@@ -160,6 +160,17 @@ export function mount() {
   }
 
   function render(focusIp = null) {
+    if (!prog) {
+      statusBox.textContent = 'not compiled';
+      effectBox.textContent = '';
+      outBox.textContent = '';
+      linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
+      linesBox.scrollTop = srcBox.scrollTop;
+      ramBox.replaceChildren();
+      codeBox.replaceChildren();
+      arrowSvg.replaceChildren();
+      return;
+    }
     const s = vm.getState();
     const view = building === null ? null : compileView(prog, building);
     const m = view ? { lastIp: view.newIp, nextIp: null, lastLine: view.line, nextLine: null } : marks(prog.ipMap, s, focusIp);
@@ -221,45 +232,60 @@ export function mount() {
   function stop() {
     if (timer) clearInterval(timer);
     timer = null;
-    building = null;
   }
 
-  function compileAndLoad(animate = false) {
-    stop();
+  function load(walk) {
     prog = compile(srcBox.value, 64);
     vm = createVM(prog.code, prog.initMem);
     last = { reads: [], writes: [] };
-    if (animate) {
-      building = 0;
-      timer = setInterval(() => {
-        building++;
-        if (building >= prog.events.length) stop();
-        render();
-      }, 100);
-    }
-    render();
+    building = walk ? 0 : null;
   }
 
-  demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; compileAndLoad(); });
-  document.getElementById('compile').addEventListener('click', () => compileAndLoad(true));
-  document.getElementById('step').addEventListener('click', () => { stop(); last = vm.step(); render(); });
-  document.getElementById('back').addEventListener('click', () => { stop(); vm.stepBack(); last = { reads: [], writes: [] }; render(); });
-  document.getElementById('reset').addEventListener('click', () => { stop(); vm.reset(); last = { reads: [], writes: [] }; render(); });
+  function unload() {
+    stop();
+    prog = null;
+    vm = null;
+    building = null;
+  }
+
+  // One compile event while walking the compile, else one instruction; false once halted.
+  function advance() {
+    if (building !== null) {
+      building++;
+      if (building >= prog.events.length) building = null;
+      return true;
+    }
+    if (!prog) load(false);
+    if (vm.getState().halted) return false;
+    last = vm.step();
+    return !last.halted;
+  }
+
+  demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; unload(); render(); });
+  srcBox.addEventListener('input', () => { unload(); render(); });
+  document.getElementById('compile').addEventListener('click', () => { stop(); load(true); render(); });
+  document.getElementById('step').addEventListener('click', () => { stop(); advance(); render(); });
+  document.getElementById('back').addEventListener('click', () => {
+    stop();
+    if (building !== null) building = Math.max(0, building - 1);
+    else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
+    render();
+  });
+  document.getElementById('reset').addEventListener('click', () => { unload(); render(); });
   document.getElementById('run').addEventListener('click', () => {
     if (timer) { stop(); render(); return; }
-    if (vm.getState().halted) vm.reset();
+    if (vm && building === null && vm.getState().halted) vm.reset();
     timer = setInterval(() => {
-      last = vm.step();
+      if (!advance()) stop();
       render();
-      if (last.halted) stop();
-    }, 60);
+    }, 80);
   });
   srcBox.addEventListener('scroll', () => { linesBox.scrollTop = srcBox.scrollTop; drawArrow(); });
   codeBox.addEventListener('scroll', drawArrow);
   window.addEventListener('resize', drawArrow);
 
   srcBox.value = DEMOS.factorial.code;
-  compileAndLoad();
+  render();
 }
 
 if (typeof document !== 'undefined' && document.getElementById('demo')) mount();
