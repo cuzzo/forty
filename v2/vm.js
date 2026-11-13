@@ -14,20 +14,21 @@ export const ALU = {
 
 const OPS = ['HALT', 'MOV', 'LOAD_IND', 'STORE_IND', 'PRINT', 'JMP', 'JAL', 'JMP_IND', 'JZ', 'DRUM_READ', ...Object.keys(ALU)];
 
-export const SECTORS = 16;
+// One cycle is one IBM 704 instruction (24 µs). The IBM 733 drum moved a word past its head every 100 µs (about 4
+// instructions) and turned once every ~24 ms (about 1,000): here 32 sectors of 8 words, 1,024 cycles a turn.
+export const SECTORS = 32;
 export const SECTOR_WORDS = 8;
+export const DRUM_WORD_CYCLES = 4;
+const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
 
-// The drum turns one word past the head per cycle.
+// The drum turns one word past the head every DRUM_WORD_CYCLES cycles.
 export const headAt = (cycles) => {
-  const word = cycles % (SECTORS * SECTOR_WORDS);
+  const word = Math.floor(cycles / DRUM_WORD_CYCLES) % (SECTORS * SECTOR_WORDS);
   return { sector: Math.floor(word / SECTOR_WORDS), word: word % SECTOR_WORDS };
 };
 
-// Cycles until the next word a DRUM_READ needs comes under the head (0 when none is waited for).
-export const waitCycles = ({ io, cycles }) => {
-  const turn = SECTORS * SECTOR_WORDS;
-  return io ? (io.sector * SECTOR_WORDS + io.done - (cycles % turn) + turn) % turn : 0;
-};
+// Cycles until the next word a DRUM_READ needs starts under the head (0 when none is waited for).
+export const waitCycles = ({ io, cycles }) => (io ? ((io.sector * SECTOR_WORDS + io.done) * DRUM_WORD_CYCLES - (cycles % TURN) + TURN) % TURN : 0);
 
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
 export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
@@ -48,13 +49,12 @@ export function createVM(initMem, drum = []) {
 
   const view = (reads = [], writes = []) => ({ pc, ip, halted, MEM, stdout, reads, writes, cycles, waited, io, DRUM });
 
-  // One cycle of a DRUM_READ in progress: wait for the next word to reach the head, or copy it.
+  // One cycle of a DRUM_READ in progress, all of it spent waiting on the drum: copy the next word if it starts now.
   function drumCycle() {
-    const head = headAt(cycles++);
-    if (head.sector !== io.sector || head.word !== io.done) {
-      waited++;
-      return view();
-    }
+    const wait = waitCycles({ io, cycles });
+    cycles++;
+    waited++;
+    if (wait) return view();
     const addr = io.addr + io.done;
     MEM[at(addr)] = DRUM[io.sector * SECTOR_WORDS + io.done];
     io = io.done + 1 === SECTOR_WORDS ? null : { ...io, done: io.done + 1 };

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
-import { GAP, RECORD_SPAN, SECTOR_WORDS, createVM, decode, encode, headAt, ioWait } from './vm.js';
+import { DRUM_WORD_CYCLES, GAP, RECORD_SPAN, REWIND_SPEED, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, encode, headAt, ioWait } from './vm.js';
 import { DEMOS, MEM_SIZE, TAPE_DATA, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
 
 function run(source) {
@@ -160,46 +160,47 @@ test('v3 streams a 128-word drum array through an 8-word buffer, with far fewer 
   assert.deepEqual(seq.state.stdout, [8256]);
   assert.deepEqual(skip.state.stdout, [8256]);
   assert.ok(seq.prog.usedCells + 128 > MEM_SIZE);
-  assert.deepEqual([seq.state.waited, skip.state.waited], [930, 210]);
-  assert.equal(drumLayout(11)[11 * SECTOR_WORDS], 9);
+  assert.deepEqual([seq.state.waited, skip.state.waited], [15775, 2335]);
+  assert.equal(drumLayout(5)[5 * SECTOR_WORDS], 9);
   assert.equal(drumLayout(1)[1 * SECTOR_WORDS], 9);
 });
 
-test('v3 DRUM_READ waits for its sector, copies one word per cycle, and steps back mid-transfer', () => {
+test('v3 DRUM_READ waits for its sector, copies a word every 4 cycles, and steps back mid-transfer', () => {
   const prog = layout('DIM B(8)\nREAD DRUM 0, B\nPRINT B[7]', MEM_SIZE);
   const vm = createVM(prog.initMem, drumLayout(1));
   const b = prog.sym.B.addr;
   vm.step();
   assert.deepEqual([vm.getState().cycles, vm.getState().io], [1, { kind: 'drum', sector: 0, addr: b, done: 0 }]);
-  assert.equal(ioWait(vm.getState()), 127);
-  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 127 cycles left');
+  assert.equal(ioWait(vm.getState()), 1023);
+  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 1023 cycles left');
   vm.step();
-  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 126 cycles left');
-  while (vm.getState().cycles < 127) vm.step();
+  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 1022 cycles left');
+  while (vm.getState().cycles < 1023) vm.step();
   assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 1 cycle left');
   vm.step();
-  assert.equal(vm.getState().waited, 127);
+  assert.equal(vm.getState().waited, 1023);
   assert.equal(ioWait(vm.getState()), 0);
   assert.equal(effect(prog, vm.getState()), 'drum sector 0 word 0 (1) -> B[0]');
   assert.deepEqual(vm.step().writes, [b]);
-  vm.step();
-  assert.deepEqual([vm.getState().io.done, vm.getState().MEM[b + 1]], [2, 2]);
+  assert.equal(effect(prog, vm.getState()), 'reading drum sector 0: next word in 3 cycles');
+  for (let i = 0; i < 4; i++) vm.step();
+  assert.deepEqual([vm.getState().io.done, vm.getState().MEM[b + 1], vm.getState().cycles], [2, 2, 1029]);
   vm.stepBack();
-  assert.deepEqual([vm.getState().io.done, vm.getState().MEM[b + 1], vm.getState().cycles], [1, 0, 129]);
+  assert.deepEqual([vm.getState().io.done, vm.getState().MEM[b + 1], vm.getState().cycles], [1, 0, 1028]);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [8]);
-  assert.equal(vm.getState().cycles, 140);
-  assert.equal(ioWait({ io: { kind: 'drum', sector: 3, done: 0 }, cycles: 130 }), 22);
+  assert.equal(vm.getState().cycles, 1057);
+  assert.equal(ioWait({ io: { kind: 'drum', sector: 3, done: 0 }, cycles: 130 }), 990);
   assert.equal(ioWait({ io: null, cycles: 5 }), 0);
-  assert.deepEqual(headAt(130), { sector: 0, word: 2 });
-  assert.throws(() => { const bad = createVM(layout('DIM B(8)\nREAD DRUM 16, B', MEM_SIZE).initMem); bad.step(); }, /No drum sector 16/);
+  assert.deepEqual(headAt(130), { sector: 4, word: 0 });
+  assert.throws(() => { const bad = createVM(layout('DIM B(8)\nREAD DRUM 32, B', MEM_SIZE).initMem); bad.step(); }, /No drum sector 32/);
 });
 
 test('v3 explains drum reads and computes MOD', () => {
   const prog = layout('DIM B(8)\nS = 3\nREAD DRUM S, B\nPRINT MOD(17, 5)', MEM_SIZE);
   const vm = createVM(prog.initMem);
   vm.step();
-  assert.equal(effect(prog, vm.getState()), 'read drum sector S (3) -> B[0]..B[7], waiting 22 cycles first');
+  assert.equal(effect(prog, vm.getState()), 'read drum sector S (3) -> B[0]..B[7], waiting 94 cycles first');
   const read = prog.code.find((instr) => instr[0] === 'DRUM_READ');
   assert.match(describe(read, prog.cells), /^DRUM_READ \(read drum\): wait for drum sector M\[\d+\] S to reach the head, then copy its 8 words into the cells from the address in M\[\d+\] const\(\d+\)$/);
   while (!vm.getState().halted) vm.step();
@@ -215,32 +216,34 @@ test('v3 reads the tape in order cheaply but pays a rewind to go back', () => {
   const { vm } = runTape(DEMOS.tape.code);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [153, 1]);
-  assert.equal(vm.getState().waited, 21 * GAP + (20 * RECORD_SPAN) / 2);
-  assert.ok((20 * RECORD_SPAN) / 2 > SECTOR_WORDS * 16);
+  assert.equal(vm.getState().waited, 21 * RECORD_SPAN + (20 * RECORD_SPAN) / REWIND_SPEED);
+  assert.ok((20 * RECORD_SPAN) / REWIND_SPEED > SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES);
 });
 
-test('v3 TAPE_READ starts the tape, copies a record, and REWIND winds back', () => {
+test('v3 TAPE_READ starts the tape, copies a word every 16 cycles, and REWIND winds back', () => {
   const { prog, vm } = runTape('DIM R(8)\nREWIND\nREAD TAPE R\nREWIND\nPRINT R[7]');
   const step = (n = 1) => { for (let i = 0; i < n; i++) vm.step(); };
   assert.equal(effect(prog, vm.getState()), 'rewind: tape already at the start');
   step();
   assert.equal(vm.getState().io, null);
-  assert.equal(effect(prog, vm.getState()), 'read tape record 1 -> R[0]..R[7], waiting 6 cycles first');
+  assert.equal(effect(prog, vm.getState()), 'read tape record 1 -> R[0]..R[7], waiting 415 cycles first');
   step();
-  assert.equal(effect(prog, vm.getState()), 'tape starting: 6 cycles left');
-  step(5);
+  assert.equal(effect(prog, vm.getState()), 'tape starting: 415 cycles left');
+  step(414);
   assert.equal(effect(prog, vm.getState()), 'tape starting: 1 cycle left');
   step();
   assert.equal(effect(prog, vm.getState()), 'tape record 1 word 0 (1) -> R[0]');
-  step(2);
-  assert.deepEqual([vm.getState().io.done, vm.getState().tapePos], [2, GAP + 2]);
-  vm.stepBack();
-  assert.deepEqual([vm.getState().io.done, vm.getState().tapePos], [1, GAP + 1]);
-  step(7);
-  assert.equal(vm.getState().tapePos, RECORD_SPAN);
-  assert.equal(effect(prog, vm.getState()), 'rewind the tape from record 2: 7 cycles');
   step();
-  assert.equal(effect(prog, vm.getState()), 'rewinding: 7 cycles left');
+  assert.equal(effect(prog, vm.getState()), 'reading tape record 1: next word in 15 cycles');
+  step(16);
+  assert.deepEqual([vm.getState().io.done, vm.getState().tapePos], [2, GAP + 2 * TAPE_WORD_CYCLES]);
+  vm.stepBack();
+  assert.deepEqual([vm.getState().io.done, vm.getState().tapePos], [1, GAP + 2 * TAPE_WORD_CYCLES - 1]);
+  while (vm.getState().io) step();
+  assert.equal(vm.getState().tapePos, RECORD_SPAN);
+  assert.equal(effect(prog, vm.getState()), 'rewind the tape from record 2: 106 cycles');
+  step();
+  assert.equal(effect(prog, vm.getState()), 'rewinding: 106 cycles left');
   while (!vm.getState().halted) vm.step();
   assert.deepEqual([vm.getState().stdout, vm.getState().tapePos], [[8], 0]);
   assert.match(describe(prog.code[1], prog.cells), /^TAPE_READ \(read tape\): start the tape, then copy the next record's 8 words into the cells from the address in M\[\d+\] const\(\d+\)$/);

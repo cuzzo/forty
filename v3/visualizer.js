@@ -1,12 +1,12 @@
 import { compile } from './compiler.js';
-import { ALU, GAP, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, createVM, decode, headAt, ioWait } from './vm.js';
+import { ALU, DRUM_WORD_CYCLES, GAP, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, headAt, ioWait } from './vm.js';
 
 export const MEM_SIZE = 128;
 
-// The 128-word array 1, 2, ... on the drum, block K stored in sector MOD(K * skip, 16).
+// The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
 export function drumLayout(skip) {
   const drum = new Int32Array(SECTORS * SECTOR_WORDS);
-  for (let k = 0; k < SECTORS; k++) {
+  for (let k = 0; k < 16; k++) {
     for (let w = 0; w < SECTOR_WORDS; w++) drum[((k * skip) % SECTORS) * SECTOR_WORDS + w] = k * SECTOR_WORDS + w + 1;
   }
   return drum;
@@ -34,13 +34,13 @@ export const DEMOS = {
   },
   drumSeq: {
     name: 'drum_in_order.f',
-    code: 'DIM BUF(8)\nSKIP = 1\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 16), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
+    code: 'DIM BUF(8)\nSKIP = 1\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 32), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
     drum: drumLayout(1),
   },
   drumSkip: {
     name: 'drum_interleaved.f',
-    code: 'DIM BUF(8)\nSKIP = 11\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 16), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
-    drum: drumLayout(11),
+    code: 'DIM BUF(8)\nSKIP = 5\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 32), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
+    drum: drumLayout(5),
   },
   tape: {
     name: 'tape_rewind.f',
@@ -85,10 +85,10 @@ export function effect(prog, state) {
     const wait = ioWait(state);
     if (kind === 'rewind') return `rewinding: ${cyc(wait)} left`;
     if (kind === 'tape') {
-      if (wait) return `tape starting: ${cyc(wait)} left`;
+      if (wait) return done ? `reading tape record ${record + 1}: next word in ${cyc(wait)}` : `tape starting: ${cyc(wait)} left`;
       return `tape record ${record + 1} word ${done} (${state.TAPE[record * RECORD_WORDS + done]}) -> ${name(addr + done)}`;
     }
-    if (wait) return `waiting for drum sector ${sector}: ${cyc(wait)} left`;
+    if (wait) return done ? `reading drum sector ${sector}: next word in ${cyc(wait)}` : `waiting for drum sector ${sector}: ${cyc(wait)} left`;
     return `drum sector ${sector} word ${done} (${state.DRUM[sector * SECTOR_WORDS + done]}) -> ${name(addr + done)}`;
   }
   const val = (i) => `${name(i)} (${M[i]})`;
@@ -189,6 +189,8 @@ export function mount() {
   let last = { reads: [], writes: [] };
   let timer = null;
   let building = null;
+  // How many VM steps each advance() took, so Previous undoes the same amount.
+  const batches = [];
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -251,17 +253,18 @@ export function mount() {
     }));
   }
 
-  // The tape moving past a fixed head in the middle: each record is its start-up gap, then its words.
+  // The tape moving past a fixed head in the middle, one word's length of tape per cell: each record is its gap, then its words.
   function renderTape(words, pos, io) {
     const at = Math.floor(pos / RECORD_SPAN);
     tapeHead.textContent = `TAPE  record ${Math.min(at + 1, RECORDS)} of ${RECORDS}${io?.kind === 'rewind' ? '  rewinding' : ''}`;
-    tapeBox.replaceChildren(...Array.from({ length: 13 }, (_, i) => {
-      const u = pos - 6 + i;
+    tapeBox.replaceChildren(...Array.from({ length: 41 }, (_, i) => {
+      const u = pos + (i - 20) * TAPE_WORD_CYCLES;
       if (u < 0 || u >= RECORDS * RECORD_SPAN) return el('span', { class: 'tu off' });
       const rec = Math.floor(u / RECORD_SPAN);
-      const w = (u % RECORD_SPAN) - GAP;
-      const under = u === pos ? ' under' : '';
-      if (w < 0) return el('span', { class: `tu gap${w === -GAP ? ' label' : ''}${under}`, text: w === -GAP ? `#${rec + 1}` : '' });
+      const w = Math.floor(((u % RECORD_SPAN) - GAP) / TAPE_WORD_CYCLES);
+      const under = i === 20 ? ' under' : '';
+      const first = u % RECORD_SPAN < TAPE_WORD_CYCLES;
+      if (w < 0) return el('span', { class: `tu gap${first ? ' label' : ''}${under}`, text: first ? `#${rec + 1}` : '' });
       const copied = io?.kind === 'tape' && rec === at && w < io.done ? ' copied' : '';
       return el('span', { class: `tu w${under}${copied}`, text: String(words[rec * RECORD_WORDS + w]) });
     }));
@@ -368,6 +371,7 @@ export function mount() {
     vm = createVM(prog.initMem, DEMOS[demoSel.value].drum ?? drumLayout(1), DEMOS[demoSel.value].tape ?? TAPE_DATA);
     last = { reads: [], writes: [] };
     building = walk ? 0 : null;
+    batches.length = 0;
   }
 
   function unload() {
@@ -394,7 +398,7 @@ export function mount() {
   function delay() {
     if (building !== null) return 80;
     const s = vm.getState();
-    return s.io && s.io.kind !== 'rewind' && !ioWait(s) ? 120 : 12;
+    return s.io?.done ? 120 : 12;
   }
 
   // The speed slider scales every delay; each step doubles or halves it, and the middle is a fifth of the original speed.
@@ -410,7 +414,8 @@ export function mount() {
     timer = setTimeout(tick, 0);
   }
 
-  // One compile event while walking the compile, else one instruction; false once halted.
+  // One compile event while walking the compile, else one instruction, one word read, or up to one sector of a
+  // device wait; false once halted.
   function advance() {
     if (building !== null) {
       building++;
@@ -419,7 +424,12 @@ export function mount() {
     }
     if (!prog) load(false);
     if (vm.getState().halted) return false;
-    last = vm.step();
+    let n = 0;
+    do {
+      last = vm.step();
+      n++;
+    } while (vm.getState().io && !last.writes.length && n < SECTOR_WORDS * DRUM_WORD_CYCLES);
+    batches.push(n);
     return !last.halted;
   }
 
@@ -434,7 +444,10 @@ export function mount() {
   document.getElementById('back').addEventListener('click', () => {
     stop();
     if (building !== null) building = Math.max(0, building - 1);
-    else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
+    else if (vm) {
+      for (let n = batches.pop() ?? 1; n > 0; n--) vm.stepBack();
+      last = { reads: [], writes: [] };
+    }
     render();
   });
   document.getElementById('run').addEventListener('click', () => {

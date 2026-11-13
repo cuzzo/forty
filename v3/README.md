@@ -18,13 +18,17 @@ everything in between.
 
 ## What the VM adds
 
-A tape position. The timings are made up to keep the real relationships:
+A tape position. The timings follow the IBM 727 tape drive, with one cycle being
+one IBM 704 instruction (24 µs):
 
-| | Cost |
-| --- | --- |
-| starting the tape before each record | 6 cycles |
-| reading a word | 1 cycle |
-| rewinding | 2 positions per cycle |
+| | IBM 727 | Here |
+| --- | --- | --- |
+| reading a 36-bit word (6 characters at 15,000 a second) | 400 µs | 16 cycles |
+| the 3/4-inch gap the tape starts in before each record | ~10 ms | 400 cycles |
+| rewinding | faster than reading | 5 times faster (an estimate) |
+
+A record of 8 words therefore takes 528 cycles to read, and the drum (v2) keeps
+its IBM 733 speed: a word every 4 cycles, a turn every 1,024.
 
 ---
 
@@ -43,14 +47,14 @@ PRINT R[0]
 
 It prints `153` (the first word of record 20), then `1` (record 1 again).
 
-| | Cycles waiting |
+| | Cycles waiting on the tape |
 | --- | --- |
-| 21 reads, 6 cycles each to start the tape | 126 |
-| the rewind over 20 records | 140 |
+| 21 reads, 528 cycles each | 11,088 |
+| the rewind over 20 records | 2,112 |
 
-Reading in order is cheap. Going back costs a rewind over everything read so
-far, and that grows the further along the tape you are: this one is already
-longer than the drum's worst wait of one turn (128 cycles).
+Reading in order costs the same every time. Going back costs a rewind over
+everything read so far, and that grows the further along the tape you are: this
+one is already longer than the drum's worst wait of one turn (1,024 cycles).
 
 ## Drum or tape?
 

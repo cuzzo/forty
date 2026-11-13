@@ -1,12 +1,12 @@
 import { compile } from './compiler.js';
-import { ALU, SECTORS, SECTOR_WORDS, createVM, decode, headAt, waitCycles } from './vm.js';
+import { ALU, DRUM_WORD_CYCLES, SECTORS, SECTOR_WORDS, createVM, decode, headAt, waitCycles } from './vm.js';
 
 export const MEM_SIZE = 128;
 
-// The 128-word array 1, 2, ... on the drum, block K stored in sector MOD(K * skip, 16).
+// The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
 export function drumLayout(skip) {
   const drum = new Int32Array(SECTORS * SECTOR_WORDS);
-  for (let k = 0; k < SECTORS; k++) {
+  for (let k = 0; k < 16; k++) {
     for (let w = 0; w < SECTOR_WORDS; w++) drum[((k * skip) % SECTORS) * SECTOR_WORDS + w] = k * SECTOR_WORDS + w + 1;
   }
   return drum;
@@ -31,13 +31,13 @@ export const DEMOS = {
   },
   drumSeq: {
     name: 'drum_in_order.f',
-    code: 'DIM BUF(8)\nSKIP = 1\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 16), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
+    code: 'DIM BUF(8)\nSKIP = 1\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 32), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
     drum: drumLayout(1),
   },
   drumSkip: {
     name: 'drum_interleaved.f',
-    code: 'DIM BUF(8)\nSKIP = 11\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 16), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
-    drum: drumLayout(11),
+    code: 'DIM BUF(8)\nSKIP = 5\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 32), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
+    drum: drumLayout(5),
   },
 };
 
@@ -73,7 +73,7 @@ export function effect(prog, state) {
   if (state.io) {
     const { sector, addr, done } = state.io;
     const wait = waitCycles(state);
-    if (wait) return `waiting for drum sector ${sector}: ${wait} cycle${wait === 1 ? '' : 's'} left`;
+    if (wait) return `${done ? 'reading' : 'waiting for'} drum sector ${sector}: ${done ? 'next word in ' : ''}${wait} cycle${wait === 1 ? '' : 's'}${done ? '' : ' left'}`;
     return `drum sector ${sector} word ${done} (${state.DRUM[sector * SECTOR_WORDS + done]}) -> ${name(addr + done)}`;
   }
   const val = (i) => `${name(i)} (${M[i]})`;
@@ -163,6 +163,8 @@ export function mount() {
   let last = { reads: [], writes: [] };
   let timer = null;
   let building = null;
+  // How many VM steps each advance() took, so Previous undoes the same amount.
+  const batches = [];
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -324,6 +326,7 @@ export function mount() {
     vm = createVM(prog.initMem, DEMOS[demoSel.value].drum ?? drumLayout(1));
     last = { reads: [], writes: [] };
     building = walk ? 0 : null;
+    batches.length = 0;
   }
 
   function unload() {
@@ -350,8 +353,7 @@ export function mount() {
   function delay() {
     if (building !== null) return 80;
     const s = vm.getState();
-    const head = headAt(s.cycles);
-    return s.io && head.sector === s.io.sector && head.word === s.io.done ? 120 : 12;
+    return s.io?.done ? 120 : 12;
   }
 
   // The speed slider scales every delay; each step doubles or halves it, and the middle is a fifth of the original speed.
@@ -367,7 +369,8 @@ export function mount() {
     timer = setTimeout(tick, 0);
   }
 
-  // One compile event while walking the compile, else one instruction; false once halted.
+  // One compile event while walking the compile, else one instruction, one word read, or up to one sector of a
+  // device wait; false once halted.
   function advance() {
     if (building !== null) {
       building++;
@@ -376,7 +379,12 @@ export function mount() {
     }
     if (!prog) load(false);
     if (vm.getState().halted) return false;
-    last = vm.step();
+    let n = 0;
+    do {
+      last = vm.step();
+      n++;
+    } while (vm.getState().io && !last.writes.length && n < SECTOR_WORDS * DRUM_WORD_CYCLES);
+    batches.push(n);
     return !last.halted;
   }
 
@@ -391,7 +399,10 @@ export function mount() {
   document.getElementById('back').addEventListener('click', () => {
     stop();
     if (building !== null) building = Math.max(0, building - 1);
-    else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
+    else if (vm) {
+      for (let n = batches.pop() ?? 1; n > 0; n--) vm.stepBack();
+      last = { reads: [], writes: [] };
+    }
     render();
   });
   document.getElementById('run').addEventListener('click', () => {
