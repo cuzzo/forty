@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { createVM } from './vm.js';
-import { DEMOS, describe, effect, marks } from './visualizer.js';
+import { DEMOS, compileView, describe, effect, marks } from './visualizer.js';
 
 function run(source) {
   const { code, initMem } = compile(source, 64);
@@ -101,4 +101,21 @@ test('v0 maps each memory cell to the source lines that use it', () => {
   assert.deepEqual(lines(saxpy, 'A[4]'), [1, 10, 13, 14]);
   const equiv = compile(DEMOS.equiv.code, 64);
   assert.deepEqual(lines(equiv, 'WORKSPACE[3]'), [1, 2, 3, 4, 5, 6, 8]);
+});
+
+test('v0 replays compilation one memory cell or instruction at a time', () => {
+  for (const demo of Object.values(DEMOS)) {
+    const prog = compile(demo.code, 64);
+    const done = compileView(prog, prog.events.length);
+    assert.equal(done.cells, prog.usedCells);
+    assert.deepEqual(done.code, prog.code);
+    assert.deepEqual(compileView(prog, 0), { cells: 0, code: [], line: null, newCell: null, newIp: null });
+  }
+  const fact = compile(DEMOS.factorial.code, 64);
+  const first = compileView(fact, 1);
+  assert.deepEqual([first.cells, first.newCell, first.line], [1, 0, 1]);
+  const k = fact.events.findIndex((ev) => ev.kind === 'patch');
+  assert.deepEqual(compileView(fact, k).code[4], ['JZ', 0, 5, 0]);
+  assert.deepEqual(compileView(fact, k + 1).code[4], ['JZ', 9, 5, 0]);
+  assert.equal(compileView(fact, k + 1).newIp, 4);
 });

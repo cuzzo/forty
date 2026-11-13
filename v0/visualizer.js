@@ -65,6 +65,24 @@ export function describe([op, a, b, c], cells) {
   return `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${ALU[op] && /[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
 }
 
+// The memory and instructions after the first k compile events, and what event k touched.
+export function compileView(prog, k) {
+  const view = { cells: 0, code: [], line: null, newCell: null, newIp: null };
+  for (const ev of prog.events.slice(0, k)) {
+    view.line = ev.line;
+    if (ev.kind === 'alloc') {
+      view.cells = ev.base + ev.size;
+      view.newCell = ev.base;
+      view.newIp = null;
+    } else {
+      view.code[ev.ip] = ev.instr;
+      view.newIp = ev.ip;
+      view.newCell = null;
+    }
+  }
+  return view;
+}
+
 function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -95,6 +113,7 @@ export function mount() {
   let vm = null;
   let last = { reads: [], writes: [] };
   let timer = null;
+  let building = null;
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -142,12 +161,16 @@ export function mount() {
 
   function render(focusIp = null) {
     const s = vm.getState();
-    const { lastIp: activeIp, nextIp, lastLine: activeLine, nextLine } = marks(prog.ipMap, s, focusIp);
+    const view = building === null ? null : compileView(prog, building);
+    const m = view ? { lastIp: view.newIp, nextIp: null, lastLine: view.line, nextLine: null } : marks(prog.ipMap, s, focusIp);
+    const { lastIp: activeIp, nextIp, lastLine: activeLine, nextLine } = m;
     const reads = new Set(last.reads);
     const writes = new Set(last.writes);
 
-    statusBox.textContent = `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
-    effectBox.textContent = effect(prog, s);
+    statusBox.textContent = view
+      ? `compiling: ${building}/${prog.events.length}`
+      : `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
+    effectBox.textContent = view ? '' : effect(prog, s);
     outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
@@ -163,21 +186,22 @@ export function mount() {
     linesBox.scrollTop = srcBox.scrollTop;
 
     ramBox.replaceChildren();
-    for (let i = 0; i < prog.usedCells; i++) {
+    for (let i = 0; i < (view ? view.cells : prog.usedCells); i++) {
       const cell = prog.cells[i];
-      const flash = writes.has(i) ? ' write' : (reads.has(i) ? ' read' : '');
+      const fresh = view && view.newCell !== null && i >= view.newCell;
+      const flash = writes.has(i) || fresh ? ' write' : (reads.has(i) ? ' read' : '');
       ramBox.append(el('div', {
         class: `cell ${cell.role}${flash}`,
         onMouseenter: () => [...linesBox.children].forEach((row, idx) => row.classList.toggle('hover', prog.cellLines[i].has(idx + 1))),
         onMouseleave: () => [...linesBox.children].forEach((row) => row.classList.remove('hover')),
       },
         el('small', { text: `[${i}] ${cell.label}` }),
-        el('strong', { text: String(s.MEM[i]) }),
+        el('strong', { text: String(view ? prog.initMem[i] : s.MEM[i]) }),
       ));
     }
 
     codeBox.replaceChildren();
-    prog.code.forEach((instr, i) => {
+    (view ? view.code : prog.code).forEach((instr, i) => {
       const active = i === activeIp;
       const isNext = i === nextIp;
       const row = el('div', {
@@ -197,23 +221,32 @@ export function mount() {
   function stop() {
     if (timer) clearInterval(timer);
     timer = null;
+    building = null;
   }
 
-  function compileAndLoad() {
+  function compileAndLoad(animate = false) {
     stop();
     prog = compile(srcBox.value, 64);
     vm = createVM(prog.code, prog.initMem);
     last = { reads: [], writes: [] };
+    if (animate) {
+      building = 0;
+      timer = setInterval(() => {
+        building++;
+        if (building >= prog.events.length) stop();
+        render();
+      }, 100);
+    }
     render();
   }
 
   demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; compileAndLoad(); });
-  document.getElementById('compile').addEventListener('click', compileAndLoad);
+  document.getElementById('compile').addEventListener('click', () => compileAndLoad(true));
   document.getElementById('step').addEventListener('click', () => { stop(); last = vm.step(); render(); });
   document.getElementById('back').addEventListener('click', () => { stop(); vm.stepBack(); last = { reads: [], writes: [] }; render(); });
   document.getElementById('reset').addEventListener('click', () => { stop(); vm.reset(); last = { reads: [], writes: [] }; render(); });
   document.getElementById('run').addEventListener('click', () => {
-    if (timer) { stop(); return; }
+    if (timer) { stop(); render(); return; }
     if (vm.getState().halted) vm.reset();
     timer = setInterval(() => {
       last = vm.step();

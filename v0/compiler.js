@@ -22,6 +22,7 @@ export function compile(source, memSize = 256) {
   const subs = Object.create(null);
   const code = [];
   const ipMap = [];
+  const events = [];
   let sym = Object.create(null);
   let pos = 0;
   let nextMem = 0;
@@ -39,6 +40,7 @@ export function compile(source, memSize = 256) {
       cells[base + i] = { role, label: size > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
     }
     touch(base, size);
+    events.push({ kind: 'alloc', base, size, line });
     return base;
   }
 
@@ -46,7 +48,13 @@ export function compile(source, memSize = 256) {
     const ip = code.length;
     code.push([op, a, b, c]);
     ipMap.push(line);
+    events.push({ kind: 'emit', ip, instr: code[ip], line });
     return ip;
+  }
+
+  function patch(ip, instr) {
+    code[ip] = instr;
+    events.push({ kind: 'patch', ip, instr, line });
   }
 
   function defConst(val) {
@@ -167,11 +175,11 @@ export function compile(source, memSize = 256) {
         if (peek() === 'ELSE') {
           eat('ELSE');
           const jmpIdx = emit('JMP', 0, 0, 0);
-          code[jzIdx] = ['JZ', code.length, cond, 0];
+          patch(jzIdx, ['JZ', code.length, cond, 0]);
           parseBlock();
-          code[jmpIdx] = ['JMP', code.length, 0, 0];
+          patch(jmpIdx, ['JMP', code.length, 0, 0]);
         } else {
-          code[jzIdx] = ['JZ', code.length, cond, 0];
+          patch(jzIdx, ['JZ', code.length, cond, 0]);
         }
         eat('END');
       } else if (tok === 'DO') {
@@ -190,7 +198,7 @@ export function compile(source, memSize = 256) {
         eat('END');
         emit('+', vAddr, vAddr, defConst(1));
         emit('JMP', loopTop, 0, 0);
-        code[exitIdx] = ['JZ', code.length, cmpTmp, 0];
+        patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
       } else if (tok === 'SUB') {
         eat('SUB');
         const name = eat();
@@ -212,7 +220,7 @@ export function compile(source, memSize = 256) {
         eat('END');
         sym = savedSym;
         emit('JMP_IND', retSlot, 0, 0);
-        code[skipIdx] = ['JMP', code.length, 0, 0];
+        patch(skipIdx, ['JMP', code.length, 0, 0]);
       } else if (tok === 'CALL') {
         eat('CALL');
         const name = eat();
@@ -236,5 +244,5 @@ export function compile(source, memSize = 256) {
   }
 
   parseBlock();
-  return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), cellLines: refs.slice(0, nextMem), sym, subs, ipMap };
+  return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), cellLines: refs.slice(0, nextMem), sym, subs, ipMap, events };
 }
