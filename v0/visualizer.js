@@ -35,10 +35,13 @@ function el(tag, props = {}, ...kids) {
 export function mount() {
   const demoSel = document.getElementById('demo');
   const srcBox = document.getElementById('src');
+  const linesBox = document.getElementById('lines');
   const ramBox = document.getElementById('ram');
   const codeBox = document.getElementById('code');
   const outBox = document.getElementById('out');
   const statusBox = document.getElementById('status');
+  const board = document.getElementById('board');
+  const arrowSvg = document.getElementById('arrow');
 
   for (const [k, d] of Object.entries(DEMOS)) demoSel.append(el('option', { value: k, text: d.name }));
 
@@ -47,12 +50,75 @@ export function mount() {
   let last = { reads: [], writes: [] };
   let timer = null;
 
-  function render() {
+  function drawArrow() {
+    arrowSvg.replaceChildren();
+    const srcRow = linesBox.querySelector('.line.active');
+    const codeRow = codeBox.querySelector('.line.active');
+    if (!srcRow || !codeRow) return;
+
+    const lb = linesBox.getBoundingClientRect();
+    const cb = codeBox.getBoundingClientRect();
+    const s = srcRow.getBoundingClientRect();
+    const c = codeRow.getBoundingClientRect();
+    if (s.bottom < lb.top || s.top > lb.bottom || c.bottom < cb.top || c.top > cb.bottom) return;
+
+    const b = board.getBoundingClientRect();
+    const x1 = s.right - b.left;
+    const y1 = s.top + s.height / 2 - b.top;
+    const x2 = c.left - b.left - 4;
+    const y2 = c.top + c.height / 2 - b.top;
+    const mx = (x1 + x2) / 2;
+
+    const ns = 'http://www.w3.org/2000/svg';
+    const defs = document.createElementNS(ns, 'defs');
+    const marker = document.createElementNS(ns, 'marker');
+    marker.setAttribute('id', 'tip');
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '8');
+    marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth', '6');
+    marker.setAttribute('markerHeight', '6');
+    marker.setAttribute('orient', 'auto');
+    const head = document.createElementNS(ns, 'path');
+    head.setAttribute('d', 'M 0 1 L 10 5 L 0 9 z');
+    head.setAttribute('fill', '#58a6ff');
+    marker.append(head);
+    defs.append(marker);
+
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', '#58a6ff');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('marker-end', 'url(#tip)');
+    arrowSvg.append(defs, path);
+  }
+
+  function render(focusIp = null) {
     const s = vm.getState();
+    const activeIp = focusIp ?? (s.halted ? null : s.ip);
+    const activeLine = activeIp !== null ? prog.ipMap[activeIp] : null;
     const reads = new Set(last.reads);
     const writes = new Set(last.writes);
+
     statusBox.textContent = `ip: ${s.ip} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
     outBox.textContent = s.stdout.join('\n');
+
+    linesBox.replaceChildren();
+    srcBox.value.split('\n').forEach((text, idx) => {
+      const ln = idx + 1;
+      const active = ln === activeLine;
+      const row = el('div', {
+        class: `line${active ? ' active' : ''}`,
+        text: `${active ? '>' : ' '} ${String(ln).padStart(2, '0')} ${text}`,
+        onClick: () => {
+          const ip = prog.ipMap.indexOf(ln);
+          if (ip >= 0) render(ip);
+        },
+      });
+      linesBox.append(row);
+      if (active) row.scrollIntoView({ block: 'nearest' });
+    });
 
     ramBox.replaceChildren();
     for (let i = 0; i < prog.usedCells; i++) {
@@ -66,11 +132,17 @@ export function mount() {
 
     codeBox.replaceChildren();
     prog.code.forEach((instr, i) => {
-      codeBox.append(el('div', {
-        class: `line${i === s.ip ? ' active' : ''}`,
-        text: `${String(i).padStart(2, '0')}: ${instr.join(' ')}`,
-      }));
+      const active = i === activeIp;
+      const row = el('div', {
+        class: `line${active ? ' active' : ''}`,
+        text: `${active ? '>' : ' '} ${String(i).padStart(2, '0')}: ${instr.join(' ')}`,
+        onClick: () => render(i),
+      });
+      codeBox.append(row);
+      if (active) row.scrollIntoView({ block: 'nearest' });
     });
+
+    requestAnimationFrame(drawArrow);
   }
 
   function stop() {
@@ -100,6 +172,9 @@ export function mount() {
       if (last.halted) stop();
     }, 60);
   });
+  linesBox.addEventListener('scroll', drawArrow);
+  codeBox.addEventListener('scroll', drawArrow);
+  window.addEventListener('resize', drawArrow);
 
   srcBox.value = DEMOS.factorial.code;
   compileAndLoad();

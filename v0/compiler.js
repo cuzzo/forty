@@ -1,10 +1,12 @@
 const PREC = { '==': 1, '!=': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '+': 2, '-': 2, '*': 3, '/': 3 };
 
 export function tokenize(source) {
-  const re = /#[^\n]*|[A-Za-z_]\w*|\d+|==|!=|<=|>=|[-+*/=(),\[\]<>]/g;
+  const re = /#[^\n]*|\n|[A-Za-z_]\w*|\d+|==|!=|<=|>=|[-+*/=(),\[\]<>]/g;
   const tokens = [];
+  let line = 1;
   for (const m of source.matchAll(re)) {
-    if (m[0][0] !== '#') tokens.push(m[0]);
+    if (m[0] === '\n') { line++; continue; }
+    if (m[0][0] !== '#') tokens.push({ text: m[0], line });
   }
   return tokens;
 }
@@ -16,9 +18,11 @@ export function compile(source, memSize = 256) {
   const consts = new Map();
   const subs = Object.create(null);
   const code = [];
+  const ipMap = [];
   let sym = Object.create(null);
   let pos = 0;
   let nextMem = 0;
+  let line = 1;
 
   function alloc(size = 1, role = 'scratch', label = '') {
     if (nextMem + size > memSize) throw new Error(`RAM overflow (${memSize} cells)`);
@@ -28,6 +32,13 @@ export function compile(source, memSize = 256) {
       cells[base + i] = { role, label: size > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
     }
     return base;
+  }
+
+  function emit(op, a, b, c) {
+    const ip = code.length;
+    code.push([op, a, b, c]);
+    ipMap.push(line);
+    return ip;
   }
 
   function defConst(val) {
@@ -44,19 +55,20 @@ export function compile(source, memSize = 256) {
     return sym[name];
   }
 
-  const peek = () => (pos < tokens.length ? tokens[pos] : null);
+  const peek = () => (pos < tokens.length ? tokens[pos].text : null);
 
   function eat(expected = null) {
     if (pos >= tokens.length) throw new SyntaxError('Unexpected end of input');
     const tok = tokens[pos++];
-    if (expected && tok !== expected) throw new SyntaxError(`Expected '${expected}', got '${tok}'`);
-    return tok;
+    line = tok.line;
+    if (expected && tok.text !== expected) throw new SyntaxError(`Expected '${expected}', got '${tok.text}'`);
+    return tok.text;
   }
 
   function valAddr(opnd) {
     if (opnd.mode === 'DIR') return opnd.addr;
     const tmp = alloc(1);
-    code.push(['LOAD_IND', tmp, opnd.addr, 0]);
+    emit('LOAD_IND', tmp, opnd.addr, 0);
     return tmp;
   }
 
@@ -84,14 +96,14 @@ export function compile(source, memSize = 256) {
     if (peek() === ',') {
       eat(',');
       const cOff = alloc(1);
-      code.push(['*', cOff, valAddr(parseExpr()), defConst(dims[0])]);
+      emit('*', cOff, valAddr(parseExpr()), defConst(dims[0]));
       const tot = alloc(1);
-      code.push(['+', tot, idx, cOff]);
+      emit('+', tot, idx, cOff);
       idx = tot;
     }
     eat(']');
     const ptr = alloc(1);
-    code.push(['+', ptr, dims ? defConst(baseAddr) : baseAddr, idx]);
+    emit('+', ptr, dims ? defConst(baseAddr) : baseAddr, idx);
     return { mode: 'IND', addr: ptr };
   }
 
@@ -101,7 +113,7 @@ export function compile(source, memSize = 256) {
     if (t === '-') {
       eat('-');
       const dst = alloc(1);
-      code.push(['-', dst, defConst(0), valAddr(parseAtom())]);
+      emit('-', dst, defConst(0), valAddr(parseAtom()));
       return { mode: 'DIR', addr: dst };
     }
     if (t === '(') { eat('('); const e = parseExpr(); eat(')'); return e; }
@@ -114,7 +126,7 @@ export function compile(source, memSize = 256) {
       const op = eat();
       const rhs = parseExpr(PREC[op] + 1);
       const dst = alloc(1);
-      code.push([op, dst, valAddr(lhs), valAddr(rhs)]);
+      emit(op, dst, valAddr(lhs), valAddr(rhs));
       lhs = { mode: 'DIR', addr: dst };
     }
     return lhs;
@@ -122,6 +134,7 @@ export function compile(source, memSize = 256) {
 
   function parseBlock() {
     while (peek() !== null && peek() !== 'END' && peek() !== 'ELSE') {
+      line = tokens[pos].line;
       const tok = peek();
       if (tok === 'DIM') {
         eat('DIM');
@@ -135,18 +148,16 @@ export function compile(source, memSize = 256) {
         sym[name] = { addr: sym[eat()].addr, dims, isRef: false };
       } else if (tok === 'PRINT') {
         eat('PRINT');
-        code.push(['PRINT', valAddr(parseExpr()), 0, 0]);
+        emit('PRINT', valAddr(parseExpr()), 0, 0);
       } else if (tok === 'IF') {
         eat('IF');
         const cond = valAddr(parseExpr());
         eat('THEN');
-        const jzIdx = code.length;
-        code.push(['JZ', 0, cond, 0]);
+        const jzIdx = emit('JZ', 0, cond, 0);
         parseBlock();
         if (peek() === 'ELSE') {
           eat('ELSE');
-          const jmpIdx = code.length;
-          code.push(['JMP', 0, 0, 0]);
+          const jmpIdx = emit('JMP', 0, 0, 0);
           code[jzIdx] = ['JZ', code.length, cond, 0];
           parseBlock();
           code[jmpIdx] = ['JMP', code.length, 0, 0];
@@ -161,16 +172,15 @@ export function compile(source, memSize = 256) {
         const start = valAddr(parseExpr());
         eat(',');
         const stop = valAddr(parseExpr());
-        code.push(['MOV', vAddr, start, 0]);
+        emit('MOV', vAddr, start, 0);
         const loopTop = code.length;
         const cmpTmp = alloc(1);
-        code.push(['<=', cmpTmp, vAddr, stop]);
-        const exitIdx = code.length;
-        code.push(['JZ', 0, cmpTmp, 0]);
+        emit('<=', cmpTmp, vAddr, stop);
+        const exitIdx = emit('JZ', 0, cmpTmp, 0);
         parseBlock();
         eat('END');
-        code.push(['+', vAddr, vAddr, defConst(1)]);
-        code.push(['JMP', loopTop, 0, 0]);
+        emit('+', vAddr, vAddr, defConst(1));
+        emit('JMP', loopTop, 0, 0);
         code[exitIdx] = ['JZ', code.length, cmpTmp, 0];
       } else if (tok === 'SUB') {
         eat('SUB');
@@ -187,13 +197,12 @@ export function compile(source, memSize = 256) {
         }
         eat(')');
         const retSlot = alloc(1, 'linkage', `${name}.ret`);
-        const skipIdx = code.length;
-        code.push(['JMP', 0, 0, 0]);
+        const skipIdx = emit('JMP', 0, 0, 0);
         subs[name] = { entryIp: code.length, retSlot, params };
         parseBlock();
         eat('END');
         sym = savedSym;
-        code.push(['JMP_IND', retSlot, 0, 0]);
+        emit('JMP_IND', retSlot, 0, 0);
         code[skipIdx] = ['JMP', code.length, 0, 0];
       } else if (tok === 'CALL') {
         eat('CALL');
@@ -202,19 +211,19 @@ export function compile(source, memSize = 256) {
         const sub = subs[name];
         for (let i = 0; i < sub.params.length; i++) {
           if (i > 0) eat(',');
-          code.push(['MOV', sub.params[i], ptrAddr(parseExpr()), 0]);
+          emit('MOV', sub.params[i], ptrAddr(parseExpr()), 0);
         }
         eat(')');
-        code.push(['JAL', sub.retSlot, sub.entryIp, 0]);
+        emit('JAL', sub.retSlot, sub.entryIp, 0);
       } else {
         const lhs = parseLValue();
         eat('=');
         const rhs = valAddr(parseExpr());
-        code.push([lhs.mode === 'IND' ? 'STORE_IND' : 'MOV', lhs.addr, rhs, 0]);
+        emit(lhs.mode === 'IND' ? 'STORE_IND' : 'MOV', lhs.addr, rhs, 0);
       }
     }
   }
 
   parseBlock();
-  return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), sym, subs };
+  return { code, initMem, usedCells: nextMem, cells: cells.slice(0, nextMem), sym, subs, ipMap };
 }

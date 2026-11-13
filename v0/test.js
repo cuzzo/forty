@@ -11,7 +11,12 @@ function run(source) {
   return vm;
 }
 
-test('v0 runs Demos 1-4 and supports stepBack/reset', () => {
+test('v0 runs Demos 1-4, records ipMap, and supports stepBack/reset', () => {
+  const fact = compile(DEMOS.factorial.code, 64);
+  assert.equal(fact.ipMap.length, fact.code.length);
+  assert.equal(fact.ipMap[0], 1);
+  assert.equal(fact.ipMap[fact.ipMap.length - 1], 6);
+
   assert.deepEqual(run(DEMOS.factorial.code).getState().stdout, [120]);
   assert.deepEqual(run(DEMOS.swap.code).getState().stdout, [99, 10, 10]);
   assert.deepEqual(run(DEMOS.saxpy.code).getState().stdout, [40, 43, 46]);

@@ -5,8 +5,9 @@
   <title>forty v0 — Minimal Pre-Heap Fortran</title>
   <style>
     body { margin: 16px; font: 13px/1.4 monospace; background: #0e1116; color: #e6edf3; }
-    .row { display: grid; grid-template-columns: 320px 1fr 260px; gap: 12px; margin-top: 10px; }
-    textarea { width: 100%; height: 220px; background: #161b22; color: #e6edf3; border: 1px solid #30363d; font: inherit; padding: 8px; }
+    .row { position: relative; display: grid; grid-template-columns: 320px 260px 1fr; gap: 24px; margin-top: 10px; align-items: start; }
+    #arrow { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+    textarea { width: 100%; height: 140px; box-sizing: border-box; background: #161b22; color: #e6edf3; border: 1px solid #30363d; font: inherit; padding: 8px; }
     #ram { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
     .cell { padding: 6px; border: 1px solid #30363d; border-left: 3px solid #8b949e; background: #161b22; display: flex; flex-direction: column; }
     .cell.rodata { border-left-color: #3b82f6; }
@@ -15,9 +16,10 @@
     .cell.scratch { border-left-color: #f59e0b; }
     .cell.read { outline: 2px solid #22d3ee; }
     .cell.write { outline: 2px solid #fb923c; }
-    .line { padding: 2px 6px; }
+    .line { padding: 2px 6px; white-space: pre; cursor: pointer; }
     .line.active { background: #1f6feb; }
-    pre, #code { background: #161b22; border: 1px solid #30363d; padding: 8px; max-height: 360px; overflow: auto; margin: 0; }
+    #lines, #code, pre { background: #161b22; border: 1px solid #30363d; padding: 6px; max-height: 260px; overflow: auto; margin: 6px 0 0; }
+    #code { margin-top: 0; max-height: 440px; }
   </style>
 </head>
 <body>
@@ -30,13 +32,15 @@
     <button id="reset">Reset</button>
     <span id="status"></span>
   </div>
-  <div class="row">
+  <div class="row" id="board">
+    <svg id="arrow"></svg>
     <div>
       <textarea id="src" spellcheck="false"></textarea>
+      <div id="lines"></div>
       <pre id="out"></pre>
     </div>
-    <div id="ram"></div>
     <div id="code"></div>
+    <div id="ram"></div>
   </div>
   <script type="module" src="./visualizer.js"></script>
 </body>
