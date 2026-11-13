@@ -1,13 +1,20 @@
 # forty
 
-Browser-native pre-heap static-RAM Fortran compiler, virtual machine, RV32IM micro-core, and interactive visualizer in zero-dependency JavaScript.
+A barebones implementation of old-school FORTRAN (pre-heap) written in JavaScript for browser visualizations.
 
-Live demo: https://cuzzo.github.io/forty/
+Live demo: https://cuzzo.github.io/forty/v3
 
 ## Versions
+| Version | What it adds | Lines added |
+|---|---|---|
+| [v0](v0/) | Minimal Compiler | ~220 SLoC |
+| [v1](v1/) | Adds instruction visualization | ~8 SLoC |
+| [v2](v2/) | Adds the "drum" (ancient hard drive) | ~15 SLoC |
+| [v2](v3/) | Adds the "tape" (bigger, worse hard drive) | ~10 SLoC |
 
-- `v0/` — Bare-minimum `fort.py` Appendix A baseline (~220 LoC compiler, 90 LoC VM, 108 LoC visualizer): `DIM`, `EQUIV`, `PRINT`, `IF/ELSE`, `DO`, `SUB`, `CALL`, and flat `Int32Array` execution. Live at https://cuzzo.github.io/forty/v0/
-- Root (`/`) — Full pre-heap static-RAM workbench adding `TAPE`, `DRUM`, `WHILE`, hardware traps, backpatching time-lapse, 2D matrix views, and the Stage 7 RV32IM micro-core. Live at https://cuzzo.github.io/forty/
+The minimal compiler assumes knowledge of how tokenizing and machine code works.
+
+For an example of how that works, see [Puck](https://github.com/cuzzo/clear/tree/master/examples/puck/README.md), which starts at ~80 SLoC, and has 10 versions of its own.
 
 ## Files
 
