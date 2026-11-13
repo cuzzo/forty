@@ -62,7 +62,7 @@ export function effect(prog, state) {
   if (state.io) {
     const { sector, addr, done } = state.io;
     const wait = waitCycles(state);
-    if (wait) return `wait ${wait} cycles for drum sector ${sector} to turn to the head`;
+    if (wait) return `waiting for drum sector ${sector}: ${wait} cycle${wait === 1 ? '' : 's'} left`;
     return `drum sector ${sector} word ${done} (${state.DRUM[sector * SECTOR_WORDS + done]}) -> ${name(addr + done)}`;
   }
   const val = (i) => `${name(i)} (${M[i]})`;
@@ -76,7 +76,10 @@ export function effect(prog, state) {
   if (op === 'JAL') return `call ${b}, return to ${state.ip + 1} -> ${name(a)}`;
   if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
   if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
-  if (op === 'DRUM_READ') return `read drum sector ${val(b)} -> ${name(a)}..${name(a + SECTOR_WORDS - 1)}`;
+  if (op === 'DRUM_READ') {
+    const wait = waitCycles({ io: { sector: M[b], done: 0 }, cycles: state.cycles + 1 });
+    return `read drum sector ${val(b)} -> ${name(a)}..${name(a + SECTOR_WORDS - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
+  }
   return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[b], M[c])} -> ${name(a)}`;
 }
 
@@ -341,20 +344,11 @@ export function mount() {
   demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; unload(); render(); });
   srcBox.addEventListener('input', () => { unload(); render(); });
   document.getElementById('compile').addEventListener('click', () => { stop(); load(true); render(); });
-  document.getElementById('step').addEventListener('click', () => {
-    stop();
-    if (building === null && vm && waitCycles(vm.getState())) while (waitCycles(vm.getState())) vm.step();
-    else advance();
-    render();
-  });
+  document.getElementById('step').addEventListener('click', () => { stop(); advance(); render(); });
   document.getElementById('back').addEventListener('click', () => {
     stop();
     if (building !== null) building = Math.max(0, building - 1);
-    else if (vm) {
-      vm.stepBack();
-      while (waitCycles(vm.getState()) && vm.getState().cycles !== vm.getState().io.at) vm.stepBack();
-      last = { reads: [], writes: [] };
-    }
+    else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
     render();
   });
   document.getElementById('reset').addEventListener('click', () => { unload(); render(); });

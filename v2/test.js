@@ -170,10 +170,14 @@ test('v2 DRUM_READ waits for its sector, copies one word per cycle, and steps ba
   const vm = createVM(prog.initMem, drumLayout(1));
   const b = prog.sym.B.addr;
   vm.step();
-  assert.deepEqual([vm.getState().cycles, vm.getState().io], [1, { sector: 0, addr: b, done: 0, at: 1 }]);
+  assert.deepEqual([vm.getState().cycles, vm.getState().io], [1, { sector: 0, addr: b, done: 0 }]);
   assert.equal(waitCycles(vm.getState()), 127);
-  assert.equal(effect(prog, vm.getState()), 'wait 127 cycles for drum sector 0 to turn to the head');
-  while (vm.getState().cycles < 128) vm.step();
+  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 127 cycles left');
+  vm.step();
+  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 126 cycles left');
+  while (vm.getState().cycles < 127) vm.step();
+  assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 1 cycle left');
+  vm.step();
   assert.equal(vm.getState().waited, 127);
   assert.equal(waitCycles(vm.getState()), 0);
   assert.equal(effect(prog, vm.getState()), 'drum sector 0 word 0 (1) -> B[0]');
@@ -194,7 +198,7 @@ test('v2 explains drum reads and computes MOD', () => {
   const prog = compile('DIM B(8)\nS = 3\nREAD DRUM S, B\nPRINT MOD(17, 5)', MEM_SIZE);
   const vm = createVM(prog.initMem);
   vm.step();
-  assert.match(effect(prog, vm.getState()), /^read drum sector S \(3\) -> B\[0\]\.\.B\[7\]$/);
+  assert.equal(effect(prog, vm.getState()), 'read drum sector S (3) -> B[0]..B[7], waiting 22 cycles first');
   const read = prog.code.find((instr) => instr[0] === 'DRUM_READ');
   assert.match(describe(read, prog.cells), /^DRUM_READ \(read drum\): wait for drum sector M\[\d+\] S to reach the head, then copy its 8 words into M\[\d+\] B\[0\] onward$/);
   while (!vm.getState().halted) vm.step();
