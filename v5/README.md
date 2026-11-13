@@ -106,5 +106,4 @@ time, row 9 first, as the IBM 721 took cards 9-edge first.
 
 `squares_punch.f` punches six cards, `array_sum_punch.f` one.
 
-The design for the rest of the 704's registers, the accumulator and MQ, is in
-[docs/registers-design.md](../docs/registers-design.md).
+[v6](../v6/README.md) adds the rest of the 704's registers, the accumulator and the MQ.
