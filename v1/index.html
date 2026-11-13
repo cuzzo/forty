@@ -8,7 +8,11 @@
     .row { position: relative; display: grid; grid-template-columns: 320px 260px 1fr; gap: 24px; margin-top: 10px; align-items: start; }
     #arrow { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
     .codebox { border: 1px solid #30363d; background: #161b22; }
-    #demo { display: block; width: 100%; box-sizing: border-box; background: #0e1116; color: #e6edf3; border: 0; border-bottom: 1px solid #30363d; font: inherit; padding: 4px 6px; }
+    .head:has(.file) { gap: 10px; }
+    .file { position: relative; display: inline-flex; align-items: center; }
+    .file::after { content: '\25BE'; position: absolute; right: 7px; pointer-events: none; color: #8b949e; }
+    .file select { appearance: none; background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; font: inherit; font-weight: 400; height: 22px; padding: 0 22px 0 8px; cursor: pointer; }
+    .file select:hover, .file select:focus { border-color: #58a6ff; outline: none; }
     .speed { display: inline-flex; align-items: center; gap: 6px; margin: 0 6px; color: #8b949e; }
     .editor { position: relative; height: 260px; }
     .editor textarea, #lines { position: absolute; inset: 0; margin: 0; box-sizing: border-box; border: 0; font: inherit; line-height: 18px; }
@@ -32,7 +36,7 @@
     .line.active { background: #1f6feb; }
     #code, pre { background: #161b22; border: 1px solid #30363d; padding: 6px; max-height: 260px; overflow: auto; margin: 6px 0 0; }
     #code { margin-top: 0; max-height: 440px; }
-    .head { color: #8b949e; font-weight: 700; margin: 6px 0 4px; }
+    .head { color: #8b949e; font-weight: 700; margin: 6px 0 4px; height: 22px; display: flex; align-items: center; }
     .bar { display: flex; align-items: center; gap: 4px; }
     .legend { margin-left: auto; display: flex; gap: 12px; color: #8b949e; }
     .legend i { display: inline-block; width: 3px; height: 12px; margin-right: 5px; vertical-align: middle; }
@@ -62,11 +66,12 @@
   <div class="row" id="board">
     <svg id="arrow"></svg>
     <div>
-      <div class="codebox"><select id="demo"></select><div class="editor"><div id="lines"></div><textarea id="src" spellcheck="false" wrap="off"></textarea></div></div>
+      <div class="head">FORTRAN <label class="file"><select id="demo" title="Program to run"></select></label></div>
+      <div class="codebox"><div class="editor"><div id="lines"></div><textarea id="src" spellcheck="false" wrap="off"></textarea></div></div>
       <div class="head">EFFECT</div><div id="effect"></div>
       <pre id="out"></pre>
     </div>
-    <div id="code"></div>
+    <div><div class="head">BYTECODE</div><div id="code"></div></div>
     <div id="ram"></div>
   </div>
   <script type="module" src="./visualizer.js"></script>
