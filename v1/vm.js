@@ -82,8 +82,7 @@ export function createVM(initMem) {
       throw new Error(`Unknown opcode: ${op}`);
     }
 
-    if (ip < 0 || ip > MEM.length) throw new RangeError(`Instruction pointer out of bounds: ${ip}`);
-    if (ip === MEM.length) halted = true;
+    at(ip);
     return { pc, ip, halted, MEM, stdout, reads, writes };
   }
 

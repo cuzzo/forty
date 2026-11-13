@@ -192,14 +192,17 @@ function build(source, memSize, dataBase) {
       } else if (tok === 'READ') {
         eat('READ');
         const device = eat();
-        if (device !== 'TAPE' && device !== 'DRUM') throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
-        const sector = device === 'DRUM' ? valAddr(parseExpr()) : 0;
-        if (device === 'DRUM') eat(',');
-        const words = device === 'TAPE' ? RECORD_WORDS : SECTOR_WORDS;
+        const [op, words] = { TAPE: ['TAPE_READ', RECORD_WORDS], DRUM: ['DRUM_READ', SECTOR_WORDS] }[device] ?? [];
+        if (!op) throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
+        let sector = 0;
+        if (op === 'DRUM_READ') {
+          sector = valAddr(parseExpr());
+          eat(',');
+        }
         const buf = eat();
         const v = getVar(buf);
         if (!v.isRef && span(v.dims) < words) throw new SyntaxError(`${device} destination '${buf}' needs at least ${words} cells`);
-        emit(device === 'TAPE' ? 'TAPE_READ' : 'DRUM_READ', v.addr, sector, v.isRef ? 1 : 0);
+        emit(op, v.addr, sector, +v.isRef);
       } else if (tok === 'REWIND') {
         eat('REWIND');
         emit('REWIND', 0, 0, 0);

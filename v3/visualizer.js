@@ -185,7 +185,6 @@ export function mount() {
   let last = { reads: [], writes: [] };
   let timer = null;
   let building = null;
-  let error = null;
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -268,8 +267,8 @@ export function mount() {
     if (!prog) {
       renderTape(DEMOS[demoSel.value].tape ?? TAPE_DATA, 0, null);
       renderDrum(DEMOS[demoSel.value].drum ?? drumLayout(1), 0, null);
-      statusBox.textContent = error ? 'error' : 'not compiled';
-      effectBox.textContent = error ?? '';
+      statusBox.textContent = 'not compiled';
+      effectBox.textContent = '';
       outBox.textContent = '';
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
@@ -285,12 +284,10 @@ export function mount() {
     const reads = new Set(last.reads);
     const writes = new Set(last.writes);
 
-    statusBox.textContent = error
-      ? 'error'
-      : (view
-        ? `compiling: ${building}/${prog.events.length}`
-        : `pc ${s.pc ?? '-'} | next ${nextIp ?? '-'} | cycle ${s.cycles} | waited ${s.waited}${s.halted ? ' | HALTED' : ''}`);
-    effectBox.textContent = error ?? (view ? '' : effect(prog, s));
+    statusBox.textContent = view
+      ? `compiling: ${building}/${prog.events.length}`
+      : `pc ${s.pc ?? '-'} | next ${nextIp ?? '-'} | cycle ${s.cycles} | waited ${s.waited}${s.halted ? ' | HALTED' : ''}`;
+    effectBox.textContent = view ? '' : effect(prog, s);
     outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
@@ -374,18 +371,19 @@ export function mount() {
     prog = null;
     vm = null;
     building = null;
-    error = null;
   }
 
+  // Show what went wrong in place of the status and effect, until the next action redraws them.
   function act(fn) {
     try {
-      error = null;
       fn();
+      render();
     } catch (e) {
       stop();
-      error = e.message;
+      render();
+      statusBox.textContent = 'error';
+      effectBox.textContent = e.message;
     }
-    render();
   }
 
   // Every cycle takes the same time, except that a word coming off the drum is slowed down to watch.
@@ -414,7 +412,6 @@ export function mount() {
   document.getElementById('step').addEventListener('click', () => { stop(); act(advance); });
   document.getElementById('back').addEventListener('click', () => {
     stop();
-    error = null;
     if (building !== null) building = Math.max(0, building - 1);
     else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
     render();

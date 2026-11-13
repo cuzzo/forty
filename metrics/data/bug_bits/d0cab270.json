@@ -1,0 +1,41 @@
+{
+ "rev": "d0cab270",
+ "dirs": {
+  ".": {
+   "total_bits": 406.0,
+   "path_bits": 364.0,
+   "state_bits": 42.0,
+   "ordering_bits": 0.0
+  },
+  "v0": {
+   "total_bits": 213.0,
+   "path_bits": 188.0,
+   "state_bits": 25.0,
+   "ordering_bits": 0.0
+  },
+  "v1": {
+   "total_bits": 232.0,
+   "path_bits": 207.0,
+   "state_bits": 25.0,
+   "ordering_bits": 0.0
+  },
+  "v2": {
+   "total_bits": 280.0,
+   "path_bits": 252.0,
+   "state_bits": 28.0,
+   "ordering_bits": 0.0
+  },
+  "v3": {
+   "total_bits": 323.0,
+   "path_bits": 293.0,
+   "state_bits": 30.0,
+   "ordering_bits": 0.0
+  }
+ },
+ "total": {
+  "total_bits": 1454.0,
+  "path_bits": 1304.0,
+  "state_bits": 150.0,
+  "ordering_bits": 0.0
+ }
+}

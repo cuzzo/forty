@@ -170,7 +170,7 @@ test('v1 undoes a step that faults, so stepping again faults again', () => {
   assert.deepEqual([vm.getState().ip, vm.getState().steps], at);
   assert.throws(() => vm.step(), /Division by zero/);
   assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
-  assert.throws(() => createVM([encode(['JMP_IND', 1, 0, 0]), -1]).step(), /Instruction pointer out of bounds/);
+  assert.throws(() => createVM([encode(['JMP_IND', 1, 0, 0]), -1]).step(), /Memory address out of bounds: -1/);
   assert.throws(() => encode(['BOGUS', 0, 0, 0]), /Unknown opcode: BOGUS/);
   assert.throws(() => encode(['MOV', 512, 0, 0]), /Operand out of 9-bit range/);
   assert.equal(effect(compile('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
