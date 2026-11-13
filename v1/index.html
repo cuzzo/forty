@@ -41,6 +41,13 @@
     .legend { margin-left: auto; display: flex; gap: 12px; color: #8b949e; }
     .legend i { display: inline-block; width: 3px; height: 12px; margin-right: 5px; vertical-align: middle; }
     .legend i.box { width: 10px; height: 10px; background: none; }
+    #out { background: #161b22; border: 1px solid #30363d; padding: 6px; max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+    .card { display: block; width: 100%; flex: none; font-family: monospace; font-size: 1.65px; }
+    .card .stock { fill: #efe3c2; }
+    .card text { fill: #3a2f1a; text-anchor: middle; font-weight: 700; }
+    .printed { fill: #b8a678; font-family: monospace; font-size: 1.5px; text-anchor: middle; }
+    .card .hole { fill: #0e1116; }
+    .card .punching { fill: rgba(250, 204, 21, 0.45); }
     #effect { background: #161b22; border: 1px solid #30363d; padding: 6px; white-space: pre-wrap; }
   </style>
 </head>
@@ -69,7 +76,7 @@
       <div class="head">FORTRAN <label class="file"><select id="demo" title="Program to run"></select></label></div>
       <div class="codebox"><div class="editor"><div id="lines"></div><textarea id="src" spellcheck="false" wrap="off"></textarea></div></div>
       <div class="head">EFFECT</div><div id="effect"></div>
-      <pre id="out"></pre>
+      <div class="head">OUTPUT</div><div id="out"></div>
     </div>
     <div><div class="head">BYTECODE</div><div id="code"></div></div>
     <div id="ram"></div>

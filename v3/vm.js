@@ -20,6 +20,9 @@ export const SECTORS = 32;
 export const SECTOR_WORDS = 8;
 export const DRUM_WORD_CYCLES = 4;
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
+// The IBM 721 card punch did 100 cards a minute, 600 ms a card, about 25,000 instructions: 12 rows of ~2,083 cycles.
+export const CARD_ROWS = 12;
+export const ROW_CYCLES = 2083;
 export const RECORDS = 64;
 export const RECORD_WORDS = 8;
 // The IBM 727 tape read 15,000 characters a second, so a 36-bit word (6 characters) took 400 µs, about 16
@@ -37,9 +40,10 @@ export const headAt = (cycles) => {
 };
 
 // Cycles left before a read's next word can be copied (a drum word as it starts under the head, a tape word once it
-// has passed it), or before a rewind finishes; 0 when a word is copied now.
+// has passed it), before the card punch finishes its next row, or before a rewind finishes; 0 when that happens now.
 export const ioWait = ({ io, cycles, tapePos }) => {
   if (!io) return 0;
+  if (io.kind === 'punch') return io.start + (io.done + 1) * ROW_CYCLES - 1 - cycles;
   if (io.kind === 'rewind') return Math.ceil(tapePos / REWIND_SPEED);
   if (io.kind === 'tape') {
     const t = (tapePos % RECORD_SPAN) - GAP;
@@ -75,11 +79,20 @@ export function createVM(initMem, drum = [], tape = []) {
     ip = pc + 1;
   }
 
-  // One cycle of a drum read, tape read, or rewind in progress, all of it spent waiting on the device.
+  // One cycle of a drum read, tape read, rewind or card punch in progress, all of it spent waiting on the device.
   function ioCycle() {
     const wait = ioWait({ io, cycles, tapePos });
     cycles++;
     waited++;
+    if (io.kind === 'punch') {
+      if (wait) return view();
+      io = { ...io, done: io.done + 1 };
+      if (io.done === CARD_ROWS) {
+        stdout.push(io.value);
+        finish();
+      }
+      return view();
+    }
     if (io.kind === 'rewind') {
       tapePos = Math.max(0, tapePos - REWIND_SPEED);
       if (!tapePos) finish();
@@ -127,7 +140,8 @@ export function createVM(initMem, drum = [], tape = []) {
       MEM[t] = MEM[b];
     } else if (op === 'PRINT') {
       reads.push(at(a));
-      stdout.push(MEM[a]);
+      io = { kind: 'punch', value: MEM[a], done: 0, start: cycles };
+      ip = pc;
     } else if (op === 'JMP') {
       ip = a;
     } else if (op === 'JAL') {

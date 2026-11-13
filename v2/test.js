@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
-import { SECTOR_WORDS, createVM, decode, encode, headAt, waitCycles } from './vm.js';
-import { DEMOS, MEM_SIZE, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
+import { CARD_ROWS, ROW_CYCLES, SECTOR_WORDS, createVM, decode, encode, headAt, waitCycles } from './vm.js';
+import { DEMOS, MEM_SIZE, PUNCH_ORDER, cardPunches, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
 
 function run(source) {
   const vm = createVM(layout(source, MEM_SIZE).initMem);
@@ -68,7 +68,7 @@ test('v2 says what the next instruction will do, in the names of its cells', () 
   assert.ok(seen.some((line) => / -> \*SWAP\.A = const\(2\) \[\d+\]$/.test(line)), seen.join('\n'));
   assert.ok(seen.some((line) => line.startsWith('call ')));
   assert.ok(seen.some((line) => line.startsWith('return to ')));
-  assert.ok(seen.some((line) => line.startsWith('print ')));
+  assert.ok(seen.some((line) => line.startsWith('punch ')));
   assert.equal(seen.at(-1), 'halt');
 });
 
@@ -160,7 +160,7 @@ test('v2 streams a 128-word drum array through an 8-word buffer, with far fewer 
   assert.deepEqual(seq.state.stdout, [8256]);
   assert.deepEqual(skip.state.stdout, [8256]);
   assert.ok(seq.prog.usedCells + 128 > MEM_SIZE);
-  assert.deepEqual([seq.state.waited, skip.state.waited], [15775, 2335]);
+  assert.deepEqual([seq.state.waited, skip.state.waited], [15775 + CARD_ROWS * ROW_CYCLES, 2335 + CARD_ROWS * ROW_CYCLES]);
   assert.equal(drumLayout(5)[5 * SECTOR_WORDS], 9);
   assert.equal(drumLayout(1)[1 * SECTOR_WORDS], 9);
 });
@@ -189,7 +189,7 @@ test('v2 DRUM_READ waits for its sector, copies a word every 4 cycles, and steps
   assert.deepEqual([vm.getState().io.done, vm.getState().MEM[b + 1], vm.getState().cycles], [1, 0, 1028]);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [8]);
-  assert.equal(vm.getState().cycles, 1057);
+  assert.equal(vm.getState().cycles, 1057 + CARD_ROWS * ROW_CYCLES);
   assert.equal(waitCycles({ io: { sector: 3, done: 0 }, cycles: 130 }), 990);
   assert.equal(waitCycles({ io: null, cycles: 5 }), 0);
   assert.deepEqual(headAt(130), { sector: 4, word: 0 });
@@ -243,4 +243,23 @@ test('v2 reads the drum into a SUB array argument, and stops at the end of RAM',
   const edge = createVM(mem, drumLayout(1));
   assert.throws(() => { for (;;) edge.step(); }, new RegExp(`Memory address out of bounds: ${MEM_SIZE}`));
   assert.equal(edge.getState().io.done, 3);
+});
+
+test('v2 punches a number into columns 1-10 of a card, a row per digit and row 11 for minus', () => {
+  assert.deepEqual(cardPunches(120), [{ col: 7, row: 1 }, { col: 8, row: 2 }, { col: 9, row: 0 }]);
+  assert.deepEqual(cardPunches(-5), [{ col: 8, row: 11 }, { col: 9, row: 5 }]);
+  assert.deepEqual(PUNCH_ORDER.slice(0, 2), [9, 8]);
+});
+
+test('v2 PRINT holds the program while the card punch does 12 rows of ROW_CYCLES', () => {
+  const prog = layout('X = 0 - 5\nPRINT X', MEM_SIZE);
+  const vm = createVM(prog.initMem);
+  while (!vm.getState().io) vm.step();
+  assert.equal(effect(prog, vm.getState()), 'punching -5 onto a card: row 9 in 2083 cycles');
+  while (vm.getState().io.done < 1) vm.step();
+  assert.equal(effect(prog, vm.getState()), 'punching -5 onto a card: row 8 in 2083 cycles');
+  assert.deepEqual(vm.getState().stdout, []);
+  while (!vm.getState().halted) vm.step();
+  assert.deepEqual(vm.getState().stdout, [-5]);
+  assert.equal(vm.getState().waited, CARD_ROWS * ROW_CYCLES);
 });

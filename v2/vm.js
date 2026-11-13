@@ -20,6 +20,9 @@ export const SECTORS = 32;
 export const SECTOR_WORDS = 8;
 export const DRUM_WORD_CYCLES = 4;
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
+// The IBM 721 card punch did 100 cards a minute, 600 ms a card, about 25,000 instructions: 12 rows of ~2,083 cycles.
+export const CARD_ROWS = 12;
+export const ROW_CYCLES = 2083;
 
 // The drum turns one word past the head every DRUM_WORD_CYCLES cycles.
 export const headAt = (cycles) => {
@@ -27,8 +30,13 @@ export const headAt = (cycles) => {
   return { sector: Math.floor(word / SECTOR_WORDS), word: word % SECTOR_WORDS };
 };
 
-// Cycles until the next word a DRUM_READ needs starts under the head (0 when none is waited for).
-export const waitCycles = ({ io, cycles }) => (io ? ((io.sector * SECTOR_WORDS + io.done) * DRUM_WORD_CYCLES - (cycles % TURN) + TURN) % TURN : 0);
+// Cycles until the next word a DRUM_READ needs starts under the head, or the card punch finishes its next row
+// (0 when that happens now, or nothing is waited for).
+export const waitCycles = ({ io, cycles }) => {
+  if (!io) return 0;
+  if (io.kind === 'punch') return io.start + (io.done + 1) * ROW_CYCLES - 1 - cycles;
+  return ((io.sector * SECTOR_WORDS + io.done) * DRUM_WORD_CYCLES - (cycles % TURN) + TURN) % TURN;
+};
 
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
 export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
@@ -49,16 +57,28 @@ export function createVM(initMem, drum = []) {
 
   const view = (reads = [], writes = []) => ({ pc, ip, halted, MEM, stdout, reads, writes, cycles, waited, io, DRUM });
 
-  // One cycle of a DRUM_READ in progress, all of it spent waiting on the drum: copy the next word if it starts now.
-  function drumCycle() {
+  function finish() {
+    io = null;
+    ip = pc + 1;
+  }
+
+  // One cycle of a drum read or a card being punched, all of it spent waiting on the device.
+  function ioCycle() {
     const wait = waitCycles({ io, cycles });
     cycles++;
     waited++;
     if (wait) return view();
-    const addr = io.addr + io.done;
-    MEM[at(addr)] = DRUM[io.sector * SECTOR_WORDS + io.done];
-    io = io.done + 1 === SECTOR_WORDS ? null : { ...io, done: io.done + 1 };
-    if (!io) ip = pc + 1;
+    io = { ...io, done: io.done + 1 };
+    if (io.kind === 'punch') {
+      if (io.done === CARD_ROWS) {
+        stdout.push(io.value);
+        finish();
+      }
+      return view();
+    }
+    const addr = io.addr + io.done - 1;
+    MEM[at(addr)] = DRUM[io.sector * SECTOR_WORDS + io.done - 1];
+    if (io.done === SECTOR_WORDS) finish();
     return view([], [addr]);
   }
 
@@ -70,7 +90,7 @@ export function createVM(initMem, drum = []) {
   function exec() {
     if (halted) return view();
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length, cycles, waited, io });
-    if (io) return drumCycle();
+    if (io) return ioCycle();
     pc = ip;
     cycles++;
     const [op, a, b, c] = decode(MEM[ip++]);
@@ -92,7 +112,8 @@ export function createVM(initMem, drum = []) {
       MEM[t] = MEM[b];
     } else if (op === 'PRINT') {
       reads.push(at(a));
-      stdout.push(MEM[a]);
+      io = { kind: 'punch', value: MEM[a], done: 0, start: cycles };
+      ip = pc;
     } else if (op === 'JMP') {
       ip = a;
     } else if (op === 'JAL') {
