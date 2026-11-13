@@ -12,6 +12,7 @@ Live demo: https://cuzzo.github.io/forty/v3
 | [v2](v2/) | Adds the "drum" (ancient hard drive) | ~15 SLoC |
 | [v3](v3/) | Adds the "tape" (bigger, worse hard drive) | ~10 SLoC |
 | [v4](v4/) | Adds a RISC-V backend | ~105 SLoC |
+| [v5](v5/) | Adds index registers and punched cards | ~40 SLoC |
 
 The minimal compiler assumes knowledge of how tokenizing and machine code works.
 
