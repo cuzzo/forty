@@ -1,4 +1,4 @@
-const ALU = {
+export const ALU = {
   '+':  (x, y) => (x + y) | 0,
   '-':  (x, y) => (x - y) | 0,
   '*':  (x, y) => Math.imul(x, y),

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { createVM } from './vm.js';
-import { DEMOS, marks } from './visualizer.js';
+import { DEMOS, effect, marks } from './visualizer.js';
 
 function run(source) {
   const { code, initMem } = compile(source, 64);
@@ -54,4 +54,19 @@ test('v0 highlights the line executed last and points to the line executed next'
   const end = marks(ipMap, vm.getState());
   assert.equal(end.nextLine, null);
   assert.equal(end.lastLine, 6);
+});
+
+test('v0 says what the next instruction will do, in the names of its cells', () => {
+  const prog = compile(DEMOS.swap.code, 64);
+  const vm = createVM(prog.code, prog.initMem);
+  const seen = [];
+  while (!vm.getState().halted) {
+    seen.push(effect(prog, vm.getState()));
+    vm.step();
+  }
+  assert.equal(effect(prog, vm.getState()), 'halted');
+  assert.ok(seen.some((line) => / -> \*SWAP\.A = const\(2\) \[\d+\]$/.test(line)), seen.join('\n'));
+  assert.ok(seen.some((line) => line.startsWith('call ')));
+  assert.ok(seen.some((line) => line.startsWith('return to ')));
+  assert.ok(seen.some((line) => line.startsWith('print ')));
 });

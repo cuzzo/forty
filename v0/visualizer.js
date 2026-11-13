@@ -1,5 +1,5 @@
 import { compile } from './compiler.js';
-import { createVM } from './vm.js';
+import { ALU, createVM } from './vm.js';
 
 export const DEMOS = {
   factorial: {
@@ -32,6 +32,25 @@ export function marks(ipMap, state, focusIp = null) {
   };
 }
 
+// What the next instruction will do, in the names of the cells it touches.
+export function effect(prog, state) {
+  if (state.halted) return 'halted';
+  const [op, a, b, c] = prog.code[state.ip];
+  const M = state.MEM;
+  const name = (i) => prog.cells[i]?.label || `M[${i}]`;
+  const val = (i) => `${name(i)} (${M[i]})`;
+  const via = (i) => `*${name(i)} = ${name(M[i])} [${M[i]}]`;
+  if (op === 'MOV') return `${val(b)} -> ${name(a)}`;
+  if (op === 'LOAD_IND') return `${via(b)} (${M[M[b]]}) -> ${name(a)}`;
+  if (op === 'STORE_IND') return `${val(b)} -> ${via(a)}`;
+  if (op === 'PRINT') return `print ${val(a)}`;
+  if (op === 'JMP') return `jump to ${a}`;
+  if (op === 'JAL') return `call ${b}, return to ${state.ip + 1} -> ${name(a)}`;
+  if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
+  if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
+  return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[b], M[c])} -> ${name(a)}`;
+}
+
 function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -52,6 +71,7 @@ export function mount() {
   const codeBox = document.getElementById('code');
   const outBox = document.getElementById('out');
   const statusBox = document.getElementById('status');
+  const effectBox = document.getElementById('effect');
   const board = document.getElementById('board');
   const arrowSvg = document.getElementById('arrow');
 
@@ -113,6 +133,7 @@ export function mount() {
     const writes = new Set(last.writes);
 
     statusBox.textContent = `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
+    effectBox.textContent = `effect: ${effect(prog, s)}`;
     outBox.textContent = s.stdout.join('\n');
 
     linesBox.replaceChildren();
@@ -121,14 +142,13 @@ export function mount() {
       const active = ln === activeLine;
       const isNext = ln === nextLine;
       const row = el('div', {
-        class: `line${active ? ' active' : ''}${isNext ? ' next' : ''}`,
+        class: `line${active ? ' active' : ''}`,
         onClick: () => {
           const ip = prog.ipMap.indexOf(ln);
           if (ip >= 0) render(ip);
         },
       },
       el('span', { text: `${isNext ? '>' : ' '} ${String(ln).padStart(2, '0')} ${text}` }),
-      ...(isNext ? [el('span', { class: 'next-tag', text: 'next' })] : []),
       );
       linesBox.append(row);
       if (isNext || (nextLine === null && active)) row.scrollIntoView({ block: 'nearest' });
@@ -149,11 +169,10 @@ export function mount() {
       const active = i === activeIp;
       const isNext = i === nextIp;
       const row = el('div', {
-        class: `line${active ? ' active' : ''}${isNext ? ' next' : ''}`,
+        class: `line${active ? ' active' : ''}`,
         onClick: () => render(i),
       },
       el('span', { text: `${isNext ? '>' : ' '} ${String(i).padStart(2, '0')}: ${instr.join(' ')}` }),
-      ...(isNext ? [el('span', { class: 'next-tag', text: 'next' })] : []),
       );
       codeBox.append(row);
       if (isNext || (nextIp === null && active)) row.scrollIntoView({ block: 'nearest' });

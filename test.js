@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile, emitRiscv } from './compiler.js';
 import { createVM, createRiscvVM } from './vm.js';
-import { DEMOS } from './visualizer.js';
+import { DEMOS, marks } from './visualizer.js';
 
 function runBoth(source, compileOpts = {}, vmOpts = {}) {
   const compiled = compile(source, compileOpts);
@@ -134,4 +134,30 @@ test('WHILE loops and hardware bounds traps work across VM and RISC-V', () => {
   const badMem = runBoth('DIM A(2)\nA[500] = 1', { memSize: 32 });
   assert.equal(badMem.vmState.trap?.code, 'TRAP_OOB_MEM');
   assert.equal(badMem.rvState.trap?.code, 'TRAP_OOB_MEM');
+});
+
+test('highlights the line executed last and points to the line executed next', () => {
+  const compiled = compile(DEMOS.factorial.code, { memSize: DEMOS.factorial.memSize });
+  const { ipMap } = compiled.debug;
+  const vm = createVM(compiled.code, compiled.initMem, { debug: compiled.debug });
+  assert.deepEqual(marks(ipMap, vm.getState()), { lastIp: null, nextIp: 0, lastLine: null, nextLine: 1 });
+  vm.step();
+  assert.equal(marks(ipMap, vm.getState()).lastLine, 1);
+  const trail = [];
+  while (!vm.getState().halted) {
+    const before = marks(ipMap, vm.getState());
+    vm.step();
+    assert.equal(marks(ipMap, vm.getState()).lastIp, before.nextIp);
+    trail.push(before);
+  }
+  assert.equal(marks(ipMap, vm.getState()).nextIp, null);
+  vm.stepBack();
+  assert.deepEqual(marks(ipMap, vm.getState()), trail.at(-1));
+  vm.seek(3);
+  assert.deepEqual(marks(ipMap, vm.getState()), trail[2]);
+
+  const rv = createRiscvVM(emitRiscv(compiled.code, compiled.initMem, compiled.usedCells), compiled.initMem, { debug: compiled.debug });
+  const start = rv.getState().ip;
+  rv.step();
+  assert.equal(rv.getState().pc, start);
 });
