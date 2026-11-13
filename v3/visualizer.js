@@ -397,8 +397,8 @@ export function mount() {
     return s.io && s.io.kind !== 'rewind' && !ioWait(s) ? 120 : 12;
   }
 
-  // The speed slider scales every delay; its middle position runs at half the original speed.
-  const pace = (ms) => ms * 2 ** (6 - Number(speedBox.value));
+  // The speed slider scales every delay; each step doubles or halves it, and the middle is a fifth of the original speed.
+  const pace = (ms) => ms * 5 * 2 ** (5 - Number(speedBox.value));
 
   // Advance on a timer, at the slider's speed, until more() says there is nothing left to do.
   function play(more) {
