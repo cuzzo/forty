@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { SECTOR_WORDS, createVM, decode, encode, headAt, waitCycles } from './vm.js';
-import { DEMOS, MEM_SIZE, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
+import { DEMOS, MEM_SIZE, compileView, describe, drumLayout, effect, layout, haltLine, marks } from './visualizer.js';
 
 function run(source) {
   const vm = createVM(layout(source, MEM_SIZE).initMem);
@@ -243,4 +243,10 @@ test('v2 reads the drum into a SUB array argument, and stops at the end of RAM',
   const edge = createVM(mem, drumLayout(1));
   assert.throws(() => { for (;;) edge.step(); }, new RegExp(`Memory address out of bounds: ${MEM_SIZE}`));
   assert.equal(edge.getState().io.done, 3);
+});
+
+test('v2 points past the last line once the program halts', () => {
+  assert.equal(haltLine(DEMOS.factorial.code), DEMOS.factorial.code.split('\n').length + 1);
+  assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
+  assert.equal(haltLine('X = 1\n\n\n'), 2);
 });

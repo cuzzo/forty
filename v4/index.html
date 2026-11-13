@@ -209,16 +209,12 @@
     }
     .drum-sec.angle { border-color: var(--scratch); }
     .drum-sec.active { background: rgba(88, 166, 255, 0.22); border-color: var(--accent); }
-    .stdout {
-      background: #0d1117;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 8px;
-      min-height: 44px;
-      max-height: 120px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-    }
+    .stdout { color-scheme: dark; height: 90px; overflow-y: scroll; scroll-snap-type: y mandatory; padding: 0 6px; background: linear-gradient(#0d1117, #161b22 25%, #161b22 75%, #0d1117); border: 1px solid var(--border); border-radius: 10px; }
+    /* 3 lines flat, and one rolled over the platen above and below them: a line's place in the 5-line window sets its roll. */
+    .pline { display: flex; gap: 1ch; height: 18px; line-height: 18px; white-space: pre; scroll-snap-align: start; animation: roll linear both; animation-timeline: view(); }
+    .pline .ln { width: 3ch; text-align: right; color: #8b949e; }
+    .pline.next .ln { opacity: 0.5; }
+    @keyframes roll { 0%, 16.67% { transform: scaleY(0.5); opacity: 0.3; } 33.33%, 66.67% { transform: none; opacity: 1; } 83.33%, 100% { transform: scaleY(0.5); opacity: 0.3; } }
     .source-lines {
       max-height: 140px;
       overflow-y: auto;
@@ -289,7 +285,7 @@
           <span id="stepCount">0</span>
         </div>
         <div id="trapBanner" class="trap-banner"></div>
-        <div class="card-head"><span>Stdout</span><span id="cycleCount">cycles: 0</span></div>
+        <div class="card-head"><span>Printer</span><span id="cycleCount">cycles: 0</span></div>
         <div id="stdout" class="stdout"></div>
       </div>
     </section>

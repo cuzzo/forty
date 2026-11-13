@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { DRUM_WORD_CYCLES, GAP, RECORD_SPAN, REWIND_SPEED, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, encode, headAt, ioWait } from './vm.js';
-import { DEMOS, MEM_SIZE, TAPE_DATA, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
+import { DEMOS, MEM_SIZE, TAPE_DATA, compileView, describe, drumLayout, effect, layout, haltLine, marks } from './visualizer.js';
 
 function run(source) {
   const vm = createVM(layout(source, MEM_SIZE).initMem);
@@ -299,4 +299,10 @@ test('v3 reads the tape into a SUB array argument', () => {
   const vm = createVM(prog.initMem, [], TAPE_DATA);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [8]);
+});
+
+test('v3 points past the last line once the program halts', () => {
+  assert.equal(haltLine(DEMOS.factorial.code), DEMOS.factorial.code.split('\n').length + 1);
+  assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
+  assert.equal(haltLine('X = 1\n\n\n'), 2);
 });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile, emitRiscv } from './compiler.js';
 import { createVM, createRiscvVM } from './vm.js';
-import { DEMOS, layout } from './visualizer.js';
+import { DEMOS, haltLine, layout } from './visualizer.js';
 
 function runBoth(source, compileOpts = {}, vmOpts = {}) {
   const compiled = layout(source, compileOpts);
@@ -155,4 +155,9 @@ test('SUB isolates local scope, indexes a 2D SUB argument, and runs DO over an a
   assert.deepEqual(vmState.stdout, [77, 20]);
   assert.deepEqual(rvState.stdout, [77, 20]);
   assert.deepEqual(runBoth('SUB S(K)\n  DO K = 1, 3\n  END\nEND\nOUT = 0\nCALL S(OUT)\nPRINT OUT', { memSize: 64 }).vmState.stdout, [4]);
+});
+
+test('v4 points past the last line once the program halts', () => {
+  assert.equal(haltLine('X = 1\nPRINT X'), 3);
+  assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
 });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { createVM } from './vm.js';
-import { DEMOS, compileView, describe, effect, layout, marks } from './visualizer.js';
+import { DEMOS, compileView, describe, effect, layout, haltLine, marks } from './visualizer.js';
 
 function run(source) {
   const { code, initMem } = layout(source, 64);
@@ -143,4 +143,10 @@ test('v0 undoes a step that faults, so stepping again faults again', () => {
   assert.throws(() => vm.step(), /Division by zero/);
   assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
   assert.throws(() => createVM([['JMP', -1, 0, 0]], new Int32Array(4)).step(), /Instruction pointer out of bounds/);
+});
+
+test('v0 points past the last line once the program halts', () => {
+  assert.equal(haltLine(DEMOS.factorial.code), DEMOS.factorial.code.split('\n').length + 1);
+  assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
+  assert.equal(haltLine('X = 1\n\n\n'), 2);
 });

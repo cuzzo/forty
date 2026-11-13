@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CARD_ROWS, COST, DRUM_WORD_CYCLES, RECORD_SPAN, ROW_CYCLES, SECTORS, SECTOR_WORDS, createVM, decode, encode, ioWait, tagOf, tagged } from './vm.js';
-import { DEMOS, MEM_SIZE, TAPE_DATA, asm, compileView, describe, drumLayout, effect, layout, marks } from './visualizer.js';
+import { DEMOS, MEM_SIZE, TAPE_DATA, asm, compileView, describe, drumLayout, effect, layout, haltLine, marks } from './visualizer.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
 const ops = (prog) => prog.code.map(([op]) => op);
@@ -156,4 +156,10 @@ test('v6 keeps v5\'s devices, cards, marks and compile walk', () => {
   assert.equal(effect(layout('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
   assert.deepEqual(decode(encode(['TXH', tagged(255, 1), tagged(200, 2), 3])), ['TXH', tagged(255, 1), tagged(200, 2), 3]);
   assert.equal(tagOf(tagged(5, 1)), 2);
+});
+
+test('v6 points past the last line once the program halts', () => {
+  assert.equal(haltLine(DEMOS.factorial.code), DEMOS.factorial.code.split('\n').length + 1);
+  assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
+  assert.equal(haltLine('X = 1\n\n\n'), 2);
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CARD_ROWS, COST, DRUM_WORD_CYCLES, GAP, RECORD_SPAN, REWIND_SPEED, ROW_CYCLES, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, encode, headAt, ioWait, tagOf } from './vm.js';
-import { DEMOS, MEM_SIZE, PUNCH_ORDER, TAPE_DATA, cardPunches, compileView, describe, drumLayout, effect, layout, marks, saving } from './visualizer.js';
+import { DEMOS, MEM_SIZE, PUNCH_ORDER, TAPE_DATA, cardPunches, compileView, describe, drumLayout, effect, layout, haltLine, marks, saving } from './visualizer.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
 // v0-v3's memory-counter code, for the tests that pin it.
@@ -260,4 +260,10 @@ test('v5 credits each instruction\'s saving as it runs, adding up to the whole-r
   assert.deepEqual(['TXH', 'TXI', 'LXD', 'PXD'].map((op) => saving([op, 0, 0, 0])), [10, 6, 2, -4]);
   assert.deepEqual([saving(['MOV', 5 | (1 << 7), 6, 0]), saving(['+', 7, 5 | (1 << 7), 6]), saving(['MOV', 5, 6, 0])], [8, 12, 0]);
   assert.equal(live(heavy.code, heavy), -36);
+});
+
+test('v5 points past the last line once the program halts', () => {
+  assert.equal(haltLine(DEMOS.factorial.code), DEMOS.factorial.code.split('\n').length + 1);
+  assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
+  assert.equal(haltLine('X = 1\n\n\n'), 2);
 });

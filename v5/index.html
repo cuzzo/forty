@@ -16,7 +16,7 @@
     .speed { display: inline-flex; align-items: center; gap: 6px; margin: 0 6px; color: #8b949e; }
     .editor { position: relative; height: 260px; }
     .editor textarea, #lines { position: absolute; inset: 0; margin: 0; box-sizing: border-box; border: 0; font: inherit; line-height: 18px; }
-    .editor textarea { z-index: 1; background: transparent; color: #e6edf3; padding: 8px 8px 8px 3ch; resize: none; white-space: pre; overflow: auto; }
+    .editor textarea { z-index: 1; background: transparent; color: #e6edf3; padding: 8px 8px 26px 3ch; resize: none; white-space: pre; overflow: auto; }
     #lines { overflow: hidden; background: #161b22; padding: 8px 0; color: #22c55e; font-weight: 700; }
     #lines .line { display: block; height: 18px; padding: 0 0 0 1ch; cursor: default; }
     #lines .line.hover, #code .line.hover { background: rgba(250, 204, 21, 0.25); }
@@ -73,6 +73,12 @@
     .card .hole { fill: #0e1116; }
     .card .punching { fill: rgba(250, 204, 21, 0.45); }
     #effect { background: #161b22; border: 1px solid #30363d; padding: 6px; white-space: pre-wrap; }
+    #out { color-scheme: dark; height: 90px; overflow-y: scroll; scroll-snap-type: y mandatory; margin: 0; padding: 0 6px; background: linear-gradient(#0e1116, #161b22 25%, #161b22 75%, #0e1116); border: 1px solid #30363d; border-radius: 10px; }
+    /* 3 lines flat, and one rolled over the platen above and below them: a line's place in the 5-line window sets its roll. */
+    .pline { display: flex; gap: 1ch; height: 18px; line-height: 18px; white-space: pre; scroll-snap-align: start; animation: roll linear both; animation-timeline: view(); }
+    .pline .ln { width: 3ch; text-align: right; color: #8b949e; }
+    .pline.next .ln { opacity: 0.5; }
+    @keyframes roll { 0%, 16.67% { transform: scaleY(0.5); opacity: 0.3; } 33.33%, 66.67% { transform: none; opacity: 1; } 83.33%, 100% { transform: scaleY(0.5); opacity: 0.3; } }
   </style>
 </head>
 <body>
@@ -100,7 +106,7 @@
       <div class="head">FORTRAN <label class="file"><select id="demo" title="Program to run"></select></label></div>
       <div class="codebox"><div class="editor"><div id="lines"></div><textarea id="src" spellcheck="false" wrap="off"></textarea></div></div>
       <div class="head">EFFECT</div><div id="effect"></div>
-      <div class="head">OUTPUT</div><pre id="out"></pre>
+      <div class="head">PRINTER</div><div id="out" title="Scroll back one line at a time"></div>
       <div class="head">CARDS</div><div id="cards"></div>
     </div>
     <div><div class="head">BYTECODE</div><div id="code"></div><div class="head" id="drum-head">DRUM</div><div id="drum"></div><div class="head" id="tape-head">TAPE</div><div id="tape"></div></div>

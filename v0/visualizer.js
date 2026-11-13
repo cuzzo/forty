@@ -107,6 +107,22 @@ function el(tag, props = {}, ...kids) {
   return node;
 }
 
+// The printer's paper, one long fan-folded sheet: every line printed so far, numbered, then the line it prints next.
+// Blank paper above line 1 lets the first lines sit in the window's flat part. A new line scrolls the newest into view.
+const PAPER_ABOVE = 4;
+
+function renderPaper(box, lines) {
+  const rows = [...Array(PAPER_ABOVE).fill(null), ...lines, ''];
+  const grew = box.childElementCount !== rows.length;
+  box.replaceChildren(...rows.map((text, i) => el('div', { class: `pline${i === rows.length - 1 ? ' next' : ''}` },
+    el('span', { class: 'ln', text: i < PAPER_ABOVE ? '' : String(i - PAPER_ABOVE + 1) }),
+    el('span', { text: String(text ?? '') }))));
+  if (grew) box.scrollTop = box.scrollHeight;
+}
+
+// Once halted, the line after the program's last line: the program has run off its end.
+export const haltLine = (source) => source.trimEnd().split('\n').length + 1;
+
 export function mount() {
   const demoSel = document.getElementById('demo');
   const srcBox = document.getElementById('src');
@@ -176,7 +192,7 @@ export function mount() {
     if (!prog) {
       statusBox.textContent = 'not compiled';
       effectBox.textContent = '';
-      outBox.textContent = '';
+      renderPaper(outBox, []);
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
       ramBox.replaceChildren();
@@ -187,6 +203,7 @@ export function mount() {
     const s = vm.getState();
     const view = building === null ? null : compileView(prog, building);
     const m = view ? { lastIp: view.newIp, nextIp: null, lastLine: view.line, nextLine: null } : marks(prog.ipMap, s, focusIp);
+    if (!view && s.halted && focusIp === null) m.lastLine = haltLine(srcBox.value);
     const { lastIp: activeIp, nextIp, lastLine: activeLine, nextLine } = m;
     const reads = new Set(last.reads);
     const writes = new Set(last.writes);
@@ -195,10 +212,10 @@ export function mount() {
       ? `compiling: ${building}/${prog.events.length}`
       : `pc: ${s.pc ?? '-'} | next: ${nextIp ?? '-'} | steps: ${s.steps}${s.halted ? ' | HALTED' : ''}`;
     effectBox.textContent = view ? '' : effect(prog, s);
-    outBox.textContent = s.stdout.join('\n');
+    renderPaper(outBox, s.stdout);
 
     linesBox.replaceChildren();
-    srcBox.value.split('\n').forEach((_, idx) => {
+    Array.from({ length: Math.max(srcBox.value.split('\n').length, activeLine ?? 0) }).forEach((_, idx) => {
       const ln = idx + 1;
       linesBox.append(el('div', { class: `line${ln === activeLine ? ' active' : ''}`, text: ln === nextLine ? '>' : ' ' }));
     });
@@ -323,6 +340,7 @@ export function mount() {
     play(advance);
   });
   srcBox.addEventListener('scroll', () => { linesBox.scrollTop = srcBox.scrollTop; drawArrow(); });
+  outBox.addEventListener('wheel', (e) => { e.preventDefault(); outBox.scrollTop += Math.sign(e.deltaY) * 18; }, { passive: false });
   codeBox.addEventListener('scroll', drawArrow);
   window.addEventListener('resize', drawArrow);
 

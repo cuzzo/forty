@@ -162,6 +162,22 @@ function cellLabelFor(name, i, dims) {
 }
 
 // The compiled program plus each memory cell's role, label and EQUIV aliases, built from the compiler's allocations.
+// The printer's paper, one long fan-folded sheet: every line printed so far, numbered, then the line it prints next.
+// Blank paper above line 1 lets the first lines sit in the window's flat part. A new line scrolls the newest into view.
+const PAPER_ABOVE = 4;
+
+function renderPaper(box, lines) {
+  const rows = [...Array(PAPER_ABOVE).fill(null), ...lines, ''];
+  const grew = box.childElementCount !== rows.length;
+  box.replaceChildren(...rows.map((text, i) => el('div', { class: `pline${i === rows.length - 1 ? ' next' : ''}` },
+    el('span', { class: 'ln', text: i < PAPER_ABOVE ? '' : String(i - PAPER_ABOVE + 1) }),
+    el('span', { text: String(text ?? '') }))));
+  if (grew) box.scrollTop = box.scrollHeight;
+}
+
+// Once halted, the line after the program's last line: the program has run off its end.
+export const haltLine = (source) => source.trimEnd().split('\n').length + 1;
+
 export function layout(source, options) {
   const compiled = compile(source, options);
   const { allocs, aliases } = compiled.debug;
@@ -301,7 +317,7 @@ export function mountVisualizer(doc = document) {
   function renderSourceLines(activeLine) {
     dom.sourceLines.replaceChildren();
     const lines = dom.source.value.split('\n');
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i < Math.max(lines.length, activeLine ?? 0); i++) {
       const ln = i + 1;
       const cls = `code-line${ln === activeLine ? ' active' : ''}`;
       dom.sourceLines.append(el('div', { class: cls },
@@ -485,7 +501,7 @@ export function mountVisualizer(doc = document) {
     dom.stepCount.textContent = String(state.steps);
     dom.cycleCount.textContent = `cycles: ${state.cycles}`;
     dom.ipLabel.textContent = `ip: ${state.ip}`;
-    dom.stdout.textContent = state.stdout.join('\n');
+    renderPaper(dom.stdout, state.stdout);
     dom.statusText.textContent = state.trap ? state.trap.code : (state.halted ? 'Halted' : 'Running');
 
     if (state.trap) {
@@ -498,7 +514,7 @@ export function mountVisualizer(doc = document) {
     dom.stepBackBtn.disabled = state.steps === 0;
     dom.stepBtn.disabled = state.halted;
 
-    const activeLine = selectedLine ?? compiled.debug.ipMap[lastEvent?.pc ?? state.ip] ?? null;
+    const activeLine = selectedLine ?? (state.halted && !state.trap ? haltLine(dom.source.value) : compiled.debug.ipMap[lastEvent?.pc ?? state.ip]) ?? null;
     renderSourceLines(activeLine);
     renderRam(state);
     renderCode(state);
@@ -559,6 +575,7 @@ export function mountVisualizer(doc = document) {
     lastTick = 0;
     rafId = requestAnimationFrame(runLoop);
   });
+  dom.stdout.addEventListener('wheel', (e) => { e.preventDefault(); dom.stdout.scrollTop += Math.sign(e.deltaY) * 18; }, { passive: false });
   dom.timeScrubber.addEventListener('input', () => {
     stopRun();
     lastEvent = null;
