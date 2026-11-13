@@ -22,9 +22,18 @@ test('v0 runs Demos 1-4, records ipMap, and supports stepBack/reset', () => {
   assert.deepEqual(run(DEMOS.saxpy.code).getState().stdout, [40, 43, 46]);
   assert.deepEqual(run(DEMOS.equiv.code).getState().stdout, [11, 22, 33, 44]);
 
+  const { code, initMem } = compile(DEMOS.factorial.code, 64);
+  const stepVm = createVM(code, initMem);
+  assert.equal(stepVm.getState().pc, null);
+  assert.equal(stepVm.getState().ip, 0);
+  stepVm.step();
+  assert.equal(stepVm.getState().pc, 0);
+  assert.equal(stepVm.getState().ip, 1);
+
   const vm = run(DEMOS.factorial.code);
   assert.equal(vm.stepBack(), true);
   assert.deepEqual(vm.getState().stdout, []);
   vm.reset();
+  assert.equal(vm.getState().pc, null);
   assert.equal(vm.getState().ip, 0);
 });

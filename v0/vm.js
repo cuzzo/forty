@@ -15,15 +15,17 @@ export function createVM(code, initMem) {
   const MEM = new Int32Array(initMem);
   const stdout = [];
   const history = [];
+  let pc = null;
   let ip = 0;
   let halted = code.length === 0;
 
   function step() {
     if (halted || ip >= code.length) {
       halted = true;
-      return { ip, halted, MEM, stdout, reads: [], writes: [] };
+      return { pc, ip, halted, MEM, stdout, reads: [], writes: [] };
     }
-    history.push({ ip, mem: MEM.slice(), stdoutLen: stdout.length });
+    history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length });
+    pc = ip;
     const [op, a, b, c] = code[ip++];
     const reads = [];
     const writes = [];
@@ -60,12 +62,13 @@ export function createVM(code, initMem) {
     }
 
     if (ip >= code.length) halted = true;
-    return { ip, halted, MEM, stdout, reads, writes };
+    return { pc, ip, halted, MEM, stdout, reads, writes };
   }
 
   function stepBack() {
     const snap = history.pop();
     if (!snap) return false;
+    pc = snap.pc;
     ip = snap.ip;
     MEM.set(snap.mem);
     stdout.length = snap.stdoutLen;
@@ -77,6 +80,7 @@ export function createVM(code, initMem) {
     MEM.set(initMem);
     stdout.length = 0;
     history.length = 0;
+    pc = null;
     ip = 0;
     halted = code.length === 0;
   }
@@ -85,6 +89,6 @@ export function createVM(code, initMem) {
     step,
     stepBack,
     reset,
-    getState: () => ({ ip, halted, MEM, stdout, steps: history.length }),
+    getState: () => ({ pc, ip, halted, MEM, stdout, steps: history.length }),
   };
 }
