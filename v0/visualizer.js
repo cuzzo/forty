@@ -116,6 +116,7 @@ export function mount() {
   const outBox = document.getElementById('out');
   const statusBox = document.getElementById('status');
   const effectBox = document.getElementById('effect');
+  const speedBox = document.getElementById('speed');
   const board = document.getElementById('board');
   const arrowSvg = document.getElementById('arrow');
 
@@ -242,7 +243,7 @@ export function mount() {
   }
 
   function stop() {
-    if (timer) clearInterval(timer);
+    if (timer) clearTimeout(timer);
     timer = null;
   }
 
@@ -273,6 +274,23 @@ export function mount() {
     }
   }
 
+  function delay() {
+    return 80;
+  }
+
+  // The speed slider scales every delay; its middle position runs at half the original speed.
+  const pace = (ms) => ms * 2 ** (6 - Number(speedBox.value));
+
+  // Advance on a timer, at the slider's speed, until more() says there is nothing left to do.
+  function play(more) {
+    stop();
+    const tick = () => act(() => {
+      if (!more()) return stop();
+      timer = setTimeout(tick, pace(delay()));
+    });
+    timer = setTimeout(tick, 0);
+  }
+
   // One compile event while walking the compile, else one instruction; false once halted.
   function advance() {
     if (building !== null) {
@@ -288,7 +306,11 @@ export function mount() {
 
   demoSel.addEventListener('change', () => { srcBox.value = DEMOS[demoSel.value].code; unload(); render(); });
   srcBox.addEventListener('input', () => { unload(); render(); });
-  document.getElementById('compile').addEventListener('click', () => { stop(); act(() => load(true)); });
+  document.getElementById('compile').addEventListener('click', () => act(() => {
+    load(true);
+    play(() => advance() && building !== null);
+  }));
+  document.getElementById('stop').addEventListener('click', () => { stop(); render(); });
   document.getElementById('step').addEventListener('click', () => { stop(); act(advance); });
   document.getElementById('back').addEventListener('click', () => {
     stop();
@@ -296,11 +318,9 @@ export function mount() {
     else if (vm) { vm.stepBack(); last = { reads: [], writes: [] }; }
     render();
   });
-  document.getElementById('reset').addEventListener('click', () => { unload(); render(); });
   document.getElementById('run').addEventListener('click', () => {
-    if (timer) { stop(); render(); return; }
     if (vm && building === null && vm.getState().halted) vm.reset();
-    timer = setInterval(() => act(() => { if (!advance()) stop(); }), 80);
+    play(advance);
   });
   srcBox.addEventListener('scroll', () => { linesBox.scrollTop = srcBox.scrollTop; drawArrow(); });
   codeBox.addEventListener('scroll', drawArrow);
