@@ -190,7 +190,9 @@ function build(source, memSize, dataBase) {
     eat('DRUM');
     const sector = valAddr(parseExpr());
     eat(',');
-    emit('DRUM_READ', ptrAddr(parseLValue()), sector, 0);
+    // FORTRAN reads as many words as the list names: here the whole array.
+    const list = parseLValue();
+    emit('DRUM_READ', ptrAddr(list), sector, span(list.dims));
   }
 
   function parsePrint() {

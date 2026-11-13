@@ -119,11 +119,13 @@ export function effect(prog, state) {
     if (kind === 'punch') return `punching a card: row ${PUNCH_ORDER[done]} in ${cyc(wait + 1)}`;
     if (kind === 'rewind') return `rewinding: ${cyc(wait)} left`;
     if (kind === 'tape') {
+      if (done === state.io.count) return `moving past the rest of tape record ${record + 1}: ${cyc(wait + 1)} left`;
       if (wait) return done ? `reading tape record ${record + 1}: next word in ${cyc(wait)}` : `tape starting: ${cyc(wait)} left`;
       return `tape record ${record + 1} word ${done} (${state.TAPE[record * RECORD_WORDS + done]}) -> ${name(addr + done)}`;
     }
     if (wait) return done ? `reading drum sector ${sector}: next word in ${cyc(wait)}` : `waiting for drum sector ${sector}: ${cyc(wait)} left`;
-    return `drum sector ${sector} word ${done} (${state.DRUM[sector * SECTOR_WORDS + done]}) -> ${name(addr + done)}`;
+    const k = (sector * SECTOR_WORDS + done) % state.DRUM.length;
+    return `drum sector ${Math.floor(k / SECTOR_WORDS)} word ${k % SECTOR_WORDS} (${state.DRUM[k]}) -> ${name(addr + done)}`;
   }
   const val = (i) => `${name(i)} (${M[ea(i)]})`;
   const xr = (r) => `index register ${reg(r)} (${XR[r]})`;
@@ -156,11 +158,11 @@ export function effect(prog, state) {
   if (op === 'PUNCH') return `punch the card (${state.pending.join(', ')}), taking ${cyc(CARD_ROWS * ROW_CYCLES)}`;
   if (op === 'DRUM_READ') {
     const wait = ioWait({ io: { kind: 'drum', sector: M[b], done: 0 }, cycles: state.cycles + 2 });
-    return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + SECTOR_WORDS - 1)}, waiting ${cyc(wait)} first`;
+    return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + c - 1)}, waiting ${cyc(wait)} first`;
   }
   if (op === 'TAPE_READ') {
-    const wait = ioWait({ io: { kind: 'tape' }, tapePos: state.tapePos });
-    return `read tape record ${record + 1} -> ${name(M[a])}..${name(M[a] + RECORD_WORDS - 1)}, waiting ${cyc(wait)} first`;
+    const wait = ioWait({ io: { kind: 'tape', done: 0, count: c }, tapePos: state.tapePos });
+    return `read tape record ${record + 1} -> ${name(M[a])}..${name(M[a] + c - 1)}, waiting ${cyc(wait)} first`;
   }
   if (op === 'REWIND') {
     return state.tapePos ? `rewind the tape from record ${record + 1}: ${cyc(ioWait({ io: { kind: 'rewind' }, tapePos: state.tapePos }))}` : 'rewind: tape already at the start';
@@ -198,9 +200,9 @@ export function describe([op, a, b, c], cells) {
     PRINT: () => `PRINT: print ${m(a)}`,
     CARD: () => `CARD: put ${m(a)} in the next 10-column field of the card being made up`,
     PUNCH: () => 'PUNCH: punch the card made up so far (the IBM 721 did 100 cards a minute)',
-    TAPE_READ: () => `TAPE_READ (read tape): start the tape, then copy the next record's ${RECORD_WORDS} words into the cells from the address in ${m(a)}`,
+    TAPE_READ: () => `TAPE_READ (read tape): start the tape, then copy the first ${c} words of the next record into the cells from the address in ${m(a)}`,
     REWIND: () => 'REWIND: wind the tape back to the start',
-    DRUM_READ: () => `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into the cells from the address in ${m(a)}`,
+    DRUM_READ: () => `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy ${c} words from there on into the cells from the address in ${m(a)}`,
   };
   return TEXT[op]?.() ?? `${op}: unknown opcode`;
 }
@@ -366,15 +368,18 @@ export function mount() {
   // A reel: the sector under the head in the middle, the one just gone above, the next one below.
   function renderDrum(words, cycles, io) {
     const head = headAt(cycles);
+    // A read starts at its sector and runs on through the following ones.
+    const drumIo = io?.sector === undefined ? null : io;
+    const fromStart = (sec, w) => (sec * SECTOR_WORDS + w - (drumIo?.sector ?? 0) * SECTOR_WORDS + words.length) % words.length;
     const sec2 = (sec) => `S${String(sec).padStart(2, '0')}`;
     drumHead.textContent = `DRUM${io?.kind === 'drum' ? `  reading ${sec2(io.sector)}` : ''}`;
     drumBox.replaceChildren(...[-1, 0, 1].map((d) => {
       const sec = (head.sector + d + SECTORS) % SECTORS;
-      return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${io?.sector === sec ? ' want' : ''}` },
+      return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${drumIo && fromStart(sec, 0) < drumIo.count ? ' want' : ''}` },
         el('span', { class: 'mark', text: d === 0 ? 'HEAD' : '' }),
         el('span', { class: 'sec', text: sec2(sec) }),
         ...Array.from({ length: SECTOR_WORDS }, (_, w) => el('span', {
-          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${io?.sector === sec && w < io.done ? ' copied' : ''}`,
+          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${drumIo && fromStart(sec, w) < drumIo.done ? ' copied' : ''}`,
           text: String(words[sec * SECTOR_WORDS + w]),
         })));
     }));

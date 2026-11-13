@@ -42,6 +42,7 @@ export const ioWait = ({ io, cycles, tapePos }) => {
   if (!io) return 0;
   if (io.kind === 'rewind') return Math.ceil(tapePos / REWIND_SPEED);
   if (io.kind === 'tape') {
+    if (io.done === io.count) return RECORD_SPAN - 1 - (tapePos % RECORD_SPAN);
     const t = (tapePos % RECORD_SPAN) - GAP;
     return TAPE_WORD_CYCLES - 1 - (t < 0 ? t : t % TAPE_WORD_CYCLES);
   }
@@ -88,13 +89,18 @@ export function createVM(initMem, drum = [], tape = []) {
     const record = Math.floor(tapePos / RECORD_SPAN);
     if (io.kind === 'tape') tapePos++;
     if (wait) return view();
-    const addr = io.addr + io.done;
-    MEM[at(addr)] = io.kind === 'tape'
-      ? TAPE[record * RECORD_WORDS + io.done]
-      : DRUM[io.sector * SECTOR_WORDS + io.done];
-    io = { ...io, done: io.done + 1 };
-    if (io.done === (io.kind === 'tape' ? RECORD_WORDS : SECTOR_WORDS)) finish();
-    return view([], [addr]);
+    // A tape list shorter than its record leaves the rest uncopied, but the tape still moves on to the next record.
+    const writes = [];
+    if (io.done < io.count) {
+      const addr = io.addr + io.done;
+      MEM[at(addr)] = io.kind === 'tape'
+        ? TAPE[record * RECORD_WORDS + io.done]
+        : DRUM[(io.sector * SECTOR_WORDS + io.done) % DRUM.length];
+      writes.push(addr);
+      io = { ...io, done: io.done + 1 };
+    }
+    if (io.done === io.count && (io.kind === 'drum' || tapePos % RECORD_SPAN === 0)) finish();
+    return view([], writes);
   }
 
   const at = (i) => {
@@ -143,11 +149,12 @@ export function createVM(initMem, drum = [], tape = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { kind: 'drum', sector: MEM[b], addr: MEM[a], done: 0 };
+      io = { kind: 'drum', sector: MEM[b], addr: MEM[a], done: 0, count: c };
       ip = pc;
     } else if (op === 'TAPE_READ') {
+      if (c > RECORD_WORDS) throw new Error(`Read-Write Check: a list of ${c} words is longer than the ${RECORD_WORDS}-word record`);
       if (tapePos >= RECORDS * RECORD_SPAN) throw new Error('End of tape');
-      io = { kind: 'tape', addr: MEM[a], done: 0 };
+      io = { kind: 'tape', addr: MEM[a], done: 0, count: c };
       ip = pc;
     } else if (op === 'REWIND') {
       if (tapePos) {

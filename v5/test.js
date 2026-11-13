@@ -162,7 +162,7 @@ test('v5 reads the tape at the IBM 727\'s speed and rewinds at that same speed',
   assert.deepEqual(state.stdout, [153, 1]);
   assert.equal(REWIND_SPEED, 1);
   assert.equal(state.waited, 21 * RECORD_SPAN + (20 * RECORD_SPAN) / REWIND_SPEED);
-  assert.equal(ioWait({ io: { kind: 'tape' }, tapePos: 0 }), GAP + TAPE_WORD_CYCLES - 1);
+  assert.equal(ioWait({ io: { kind: 'tape', done: 0, count: 8 }, tapePos: 0 }), GAP + TAPE_WORD_CYCLES - 1);
   assert.throws(() => run('DIM R(8)\nDO K = 1, 65\n  READ TAPE R\nEND', { tape: TAPE_DATA }), /End of tape/);
 });
 
@@ -222,8 +222,8 @@ test('v5 maps cells to source lines and replays compilation, as v1-v3 do without
 test('v5 scopes SUB locals, reads devices into SUB arrays, and rejects what does not parse or run', () => {
   const src = ['I = 77', 'DIM G(2, 2)', 'SUB FILL(M)', '  DIM M(2, 2)', '  DO I = 0, 1', '    M[I, 1] = (I + 1) * 10', '  END', 'END', 'CALL FILL(G)', 'PRINT I', 'PRINT G[1, 1]'].join('\n');
   assert.deepEqual(run(src).state.stdout, [77, 20]);
-  assert.deepEqual(run('DIM BIG(16)\nSUB LOAD(S, DST)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', { drum: drumLayout(1) }).state.stdout, [9, 16]);
-  assert.deepEqual(run('DIM BIG(8)\nSUB PULL(DST)\n  READ TAPE DST\nEND\nCALL PULL(BIG)\nPRINT BIG[7]', { tape: TAPE_DATA }).state.stdout, [8]);
+  assert.deepEqual(run('DIM BIG(16)\nSUB LOAD(S, DST)\n  DIM DST(8)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', { drum: drumLayout(1) }).state.stdout, [9, 16]);
+  assert.deepEqual(run('DIM BIG(8)\nSUB PULL(DST)\n  DIM DST(8)\n  READ TAPE DST\nEND\nCALL PULL(BIG)\nPRINT BIG[7]', { tape: TAPE_DATA }).state.stdout, [8]);
   for (const [bad, message] of [
     ['X = 3.14', /Expected identifier, got '\.'/],
     ['X = 1\nEND\nPRINT X', /Expected 'end of input', got 'END'/],
@@ -266,4 +266,22 @@ test('v5 points past the last line once the program halts', () => {
   assert.equal(haltLine(DEMOS.factorial.code), DEMOS.factorial.code.split('\n').length + 1);
   assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
   assert.equal(haltLine('X = 1\n\n\n'), 2);
+});
+
+test('v5 reads as many drum words as the array holds, on through the next sector', () => {
+  const read = (src) => {
+    const vm = createVM(layout(src, MEM_SIZE).initMem, drumLayout(1), TAPE_DATA);
+    while (!vm.getState().halted) vm.step();
+    return vm.getState().stdout;
+  };
+  assert.deepEqual(read('DIM B(12)\nREAD DRUM 0, B\nPRINT B[11]'), [12]);
+  assert.deepEqual(read('DIM B(4)\nX = 99\nREAD DRUM 0, B\nPRINT B[3]\nPRINT X'), [4, 99]);
+});
+
+test('v5 reads one tape record per READ, as many words as the array holds, and stops on a longer list', () => {
+  const vm = createVM(layout('DIM R(3)\nX = 99\nREAD TAPE R\nREAD TAPE R\nPRINT R[0]\nPRINT X', MEM_SIZE).initMem, [], TAPE_DATA);
+  while (!vm.getState().halted) vm.step();
+  assert.deepEqual([vm.getState().stdout, vm.getState().waited], [[9, 99], 2 * RECORD_SPAN]);
+  const long = createVM(layout('DIM R(16)\nREAD TAPE R', MEM_SIZE).initMem, [], TAPE_DATA);
+  assert.throws(() => long.step(), /Read-Write Check: a list of 16 words is longer than the 8-word record/);
 });

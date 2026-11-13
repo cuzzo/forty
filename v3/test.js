@@ -170,7 +170,7 @@ test('v3 DRUM_READ waits for its sector, copies a word every 4 cycles, and steps
   const vm = createVM(prog.initMem, drumLayout(1));
   const b = prog.sym.B.addr;
   vm.step();
-  assert.deepEqual([vm.getState().cycles, vm.getState().io], [1, { kind: 'drum', sector: 0, addr: b, done: 0 }]);
+  assert.deepEqual([vm.getState().cycles, vm.getState().io], [1, { kind: 'drum', sector: 0, addr: b, done: 0, count: 8 }]);
   assert.equal(ioWait(vm.getState()), 1023);
   assert.equal(effect(prog, vm.getState()), 'waiting for drum sector 0: 1023 cycles left');
   vm.step();
@@ -202,7 +202,7 @@ test('v3 explains drum reads and computes MOD', () => {
   vm.step();
   assert.equal(effect(prog, vm.getState()), 'read drum sector S (3) -> B[0]..B[7], waiting 94 cycles first');
   const read = prog.code.find((instr) => instr[0] === 'DRUM_READ');
-  assert.match(describe(read, prog.cells), /^DRUM_READ \(read drum\): wait for drum sector M\[\d+\] S to reach the head, then copy its 8 words into the cells from the address in M\[\d+\] const\(\d+\)$/);
+  assert.match(describe(read, prog.cells), /^DRUM_READ \(read drum\): wait for drum sector M\[\d+\] S to reach the head, then copy 8 words from there on into the cells from the address in M\[\d+\] const\(\d+\)$/);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [2]);
 });
@@ -246,7 +246,7 @@ test('v3 TAPE_READ starts the tape, copies a word every 16 cycles, and REWIND wi
   assert.equal(effect(prog, vm.getState()), 'rewinding: 106 cycles left');
   while (!vm.getState().halted) vm.step();
   assert.deepEqual([vm.getState().stdout, vm.getState().tapePos], [[8], 0]);
-  assert.match(describe(prog.code[1], prog.cells), /^TAPE_READ \(read tape\): start the tape, then copy the next record's 8 words into the cells from the address in M\[\d+\] const\(\d+\)$/);
+  assert.match(describe(prog.code[1], prog.cells), /^TAPE_READ \(read tape\): start the tape, then copy the first 8 words of the next record into the cells from the address in M\[\d+\] const\(\d+\)$/);
   assert.equal(describe(prog.code[0], prog.cells), 'REWIND: wind the tape back to the start');
 });
 
@@ -283,19 +283,19 @@ test('v3 undoes a step that faults, so stepping again faults again', () => {
 });
 
 test('v3 reads the drum into a SUB array argument, and stops at the end of RAM', () => {
-  const prog = layout('DIM BIG(16)\nSUB LOAD(S, DST)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', MEM_SIZE);
+  const prog = layout('DIM BIG(16)\nSUB LOAD(S, DST)\n  DIM DST(8)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', MEM_SIZE);
   const vm = createVM(prog.initMem, drumLayout(1));
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [9, 16]);
   const mem = new Int32Array(MEM_SIZE);
-  mem.set([encode(['DRUM_READ', 1, 2, 0]), MEM_SIZE - 3, 1]);
+  mem.set([encode(['DRUM_READ', 1, 2, 8]), MEM_SIZE - 3, 1]);
   const edge = createVM(mem, drumLayout(1));
   assert.throws(() => { for (;;) edge.step(); }, new RegExp(`Memory address out of bounds: ${MEM_SIZE}`));
   assert.equal(edge.getState().io.done, 3);
 });
 
 test('v3 reads the tape into a SUB array argument', () => {
-  const prog = layout('DIM BIG(8)\nSUB PULL(DST)\n  READ TAPE DST\nEND\nCALL PULL(BIG)\nPRINT BIG[7]', MEM_SIZE);
+  const prog = layout('DIM BIG(8)\nSUB PULL(DST)\n  DIM DST(8)\n  READ TAPE DST\nEND\nCALL PULL(BIG)\nPRINT BIG[7]', MEM_SIZE);
   const vm = createVM(prog.initMem, [], TAPE_DATA);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [8]);
@@ -305,4 +305,22 @@ test('v3 points past the last line once the program halts', () => {
   assert.equal(haltLine(DEMOS.factorial.code), DEMOS.factorial.code.split('\n').length + 1);
   assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
   assert.equal(haltLine('X = 1\n\n\n'), 2);
+});
+
+test('v3 reads as many drum words as the array holds, on through the next sector', () => {
+  const read = (src) => {
+    const vm = createVM(layout(src, MEM_SIZE).initMem, drumLayout(1), TAPE_DATA);
+    while (!vm.getState().halted) vm.step();
+    return vm.getState().stdout;
+  };
+  assert.deepEqual(read('DIM B(12)\nREAD DRUM 0, B\nPRINT B[11]'), [12]);
+  assert.deepEqual(read('DIM B(4)\nX = 99\nREAD DRUM 0, B\nPRINT B[3]\nPRINT X'), [4, 99]);
+});
+
+test('v3 reads one tape record per READ, as many words as the array holds, and stops on a longer list', () => {
+  const vm = createVM(layout('DIM R(3)\nX = 99\nREAD TAPE R\nREAD TAPE R\nPRINT R[0]\nPRINT X', MEM_SIZE).initMem, [], TAPE_DATA);
+  while (!vm.getState().halted) vm.step();
+  assert.deepEqual([vm.getState().stdout, vm.getState().waited], [[9, 99], 2 * RECORD_SPAN]);
+  const long = createVM(layout('DIM R(16)\nREAD TAPE R', MEM_SIZE).initMem, [], TAPE_DATA);
+  assert.throws(() => long.step(), /Read-Write Check: a list of 16 words is longer than the 8-word record/);
 });

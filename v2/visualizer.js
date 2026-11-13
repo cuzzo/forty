@@ -74,7 +74,8 @@ export function effect(prog, state) {
     const { sector, addr, done } = state.io;
     const wait = waitCycles(state);
     if (wait) return `${done ? 'reading' : 'waiting for'} drum sector ${sector}: ${done ? 'next word in ' : ''}${wait} cycle${wait === 1 ? '' : 's'}${done ? '' : ' left'}`;
-    return `drum sector ${sector} word ${done} (${state.DRUM[sector * SECTOR_WORDS + done]}) -> ${name(addr + done)}`;
+    const k = (sector * SECTOR_WORDS + done) % state.DRUM.length;
+    return `drum sector ${Math.floor(k / SECTOR_WORDS)} word ${k % SECTOR_WORDS} (${state.DRUM[k]}) -> ${name(addr + done)}`;
   }
   const val = (i) => `${name(i)} (${M[i]})`;
   const via = (i) => `*${name(i)} = ${name(M[i])} [${M[i]}]`;
@@ -89,7 +90,7 @@ export function effect(prog, state) {
   if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
   if (op === 'DRUM_READ') {
     const wait = waitCycles({ io: { sector: M[b], done: 0 }, cycles: state.cycles + 1 });
-    return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + SECTOR_WORDS - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
+    return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + c - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
   }
   if (!(op in ALU)) return `unknown opcode ${op}`;
   return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[b], M[c])} -> ${name(a)}`;
@@ -107,7 +108,7 @@ export function describe([op, a, b, c], cells) {
   if (op === 'JAL') return `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`;
   if (op === 'JMP_IND') return `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`;
   if (op === 'JZ') return `JZ (jump if zero): if ${m(b)} is 0, go to instruction ${a}; else go to the next one`;
-  if (op === 'DRUM_READ') return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into the cells from the address in ${m(a)}`;
+  if (op === 'DRUM_READ') return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy ${c} words from there on into the cells from the address in ${m(a)}`;
   return `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${ALU[op] && /[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
 }
 
@@ -229,15 +230,18 @@ export function mount() {
   // A reel: the sector under the head in the middle, the one just gone above, the next one below.
   function renderDrum(words, cycles, io, waited) {
     const head = headAt(cycles);
+    // A read starts at its sector and runs on through the following ones.
+    const drumIo = io?.sector === undefined ? null : io;
+    const fromStart = (sec, w) => (sec * SECTOR_WORDS + w - (drumIo?.sector ?? 0) * SECTOR_WORDS + words.length) % words.length;
     const sec2 = (sec) => `S${String(sec).padStart(2, '0')}`;
     drumHead.textContent = `DRUM  cycles ${cycles}  waited ${waited}${io ? `  reading ${sec2(io.sector)}` : ''}`;
     drumBox.replaceChildren(...[-1, 0, 1].map((d) => {
       const sec = (head.sector + d + SECTORS) % SECTORS;
-      return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${io?.sector === sec ? ' want' : ''}` },
+      return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${drumIo && fromStart(sec, 0) < drumIo.count ? ' want' : ''}` },
         el('span', { class: 'mark', text: d === 0 ? 'HEAD' : '' }),
         el('span', { class: 'sec', text: sec2(sec) }),
         ...Array.from({ length: SECTOR_WORDS }, (_, w) => el('span', {
-          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${io?.sector === sec && w < io.done ? ' copied' : ''}`,
+          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${drumIo && fromStart(sec, w) < drumIo.done ? ' copied' : ''}`,
           text: String(words[sec * SECTOR_WORDS + w]),
         })));
     }));

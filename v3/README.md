@@ -13,8 +13,13 @@ everything in between.
 
 | Statement | Compiles to |
 | --- | --- |
-| `READ TAPE BUF` | `TAPE_READ` with a reference to `BUF` |
+| `READ TAPE BUF` | `TAPE_READ` with a reference to `BUF`, and `BUF`'s length |
 | `REWIND` | `REWIND` |
+
+A `READ TAPE` reads one record, as the 1956 FORTRAN manual says. A shorter `BUF`
+gets the record's first words, and the tape still moves on to the next record.
+A longer one stops the program with a Read-Write Check, as it did on the 704:
+this tape's records are 8 words, so `DIM BUF(16)` with `READ TAPE BUF` stops.
 
 ## What the VM adds
 

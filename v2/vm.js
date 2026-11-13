@@ -56,8 +56,8 @@ export function createVM(initMem, drum = []) {
     waited++;
     if (wait) return view();
     const addr = io.addr + io.done;
-    MEM[at(addr)] = DRUM[io.sector * SECTOR_WORDS + io.done];
-    io = io.done + 1 === SECTOR_WORDS ? null : { ...io, done: io.done + 1 };
+    MEM[at(addr)] = DRUM[(io.sector * SECTOR_WORDS + io.done) % DRUM.length];
+    io = io.done + 1 === io.count ? null : { ...io, done: io.done + 1 };
     if (!io) ip = pc + 1;
     return view([], [addr]);
   }
@@ -108,7 +108,7 @@ export function createVM(initMem, drum = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { sector: MEM[b], addr: MEM[a], done: 0 };
+      io = { sector: MEM[b], addr: MEM[a], done: 0, count: c };
       ip = pc;
     } else if (op in ALU) {
       reads.push(at(b), at(c));

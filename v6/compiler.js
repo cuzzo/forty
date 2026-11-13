@@ -285,7 +285,9 @@ function build(source, memSize, dataBase, registers) {
       sector = valAddr(parseExpr());
       eat(',');
     }
-    emit(`${device}_READ`, ptrAddr(parseLValue()), sector);
+    // FORTRAN reads as many words as the list names: here the whole array.
+    const list = parseLValue();
+    emit(`${device}_READ`, ptrAddr(list), sector, span(list.dims));
   }
 
   function parseRewind() {

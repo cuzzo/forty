@@ -163,3 +163,21 @@ test('v6 points past the last line once the program halts', () => {
   assert.equal(haltLine('X = 1\n\n# done?\n\n'), 4);
   assert.equal(haltLine('X = 1\n\n\n'), 2);
 });
+
+test('v6 reads as many drum words as the array holds, on through the next sector', () => {
+  const read = (src) => {
+    const vm = createVM(layout(src, MEM_SIZE).initMem, drumLayout(1), TAPE_DATA);
+    while (!vm.getState().halted) vm.step();
+    return vm.getState().stdout;
+  };
+  assert.deepEqual(read('DIM B(12)\nREAD DRUM 0, B\nPRINT B[11]'), [12]);
+  assert.deepEqual(read('DIM B(4)\nX = 99\nREAD DRUM 0, B\nPRINT B[3]\nPRINT X'), [4, 99]);
+});
+
+test('v6 reads one tape record per READ, as many words as the array holds, and stops on a longer list', () => {
+  const vm = createVM(layout('DIM R(3)\nX = 99\nREAD TAPE R\nREAD TAPE R\nPRINT R[0]\nPRINT X', MEM_SIZE).initMem, [], TAPE_DATA);
+  while (!vm.getState().halted) vm.step();
+  assert.deepEqual([vm.getState().stdout, vm.getState().waited], [[9, 99], 2 * RECORD_SPAN]);
+  const long = createVM(layout('DIM R(16)\nREAD TAPE R', MEM_SIZE).initMem, [], TAPE_DATA);
+  assert.throws(() => long.step(), /Read-Write Check: a list of 16 words is longer than the 8-word record/);
+});

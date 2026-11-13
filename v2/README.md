@@ -14,11 +14,14 @@ v2 does the same.
 
 | Statement | Compiles to |
 | --- | --- |
-| `READ DRUM sector, BUF` | `DRUM_READ` with the sector and a reference to `BUF` |
+| `READ DRUM sector, BUF` | `DRUM_READ` with the sector, a reference to `BUF`, and `BUF`'s length |
 | `MOD(a, b)` | the `%` instruction |
 
 `BUF` is passed by reference with `ptrAddr`, exactly like a `CALL` argument, so
 the destination can be a local array or a SUB's array argument.
+
+As in FORTRAN, the read copies as many words as the list names, from the
+start of the sector on through the following sectors: `DIM BUF(12)` reads 12.
 
 ## What the VM adds
 

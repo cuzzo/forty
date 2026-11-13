@@ -43,6 +43,7 @@ export const ioWait = ({ io, cycles, tapePos }) => {
   if (io.kind === 'punch') return io.start + (io.done + 1) * ROW_CYCLES - 1 - cycles;
   if (io.kind === 'rewind') return Math.ceil(tapePos / REWIND_SPEED);
   if (io.kind === 'tape') {
+    if (io.done === io.count) return RECORD_SPAN - 1 - (tapePos % RECORD_SPAN);
     const t = (tapePos % RECORD_SPAN) - GAP;
     return TAPE_WORD_CYCLES - 1 - (t < 0 ? t : t % TAPE_WORD_CYCLES);
   }
@@ -50,9 +51,12 @@ export const ioWait = ({ io, cycles, tapePos }) => {
 };
 
 // One address per instruction, as the 704's words had: 5-bit opcode, a 10-bit address and a 10-bit decrement (each
-// a tag and 8 bits), and a 2-bit index register.
-export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 17) | (b << 2) | c;
-export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 17) & 1023, (word >>> 2) & 1023, word & 3];
+// a tag and 8 bits), and a 7-bit field for an index register or a READ's word count.
+export const encode = ([op, a, b, c]) => {
+  if (c > 127) throw new RangeError(`${c} does not fit in an instruction's 7-bit count`);
+  return (OPS.indexOf(op) << 27) | (a << 17) | (b << 7) | c;
+};
+export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 17) & 1023, (word >>> 7) & 1023, word & 127];
 
 // record = false runs without the history Back needs, for measuring a program to the end.
 export function createVM(initMem, drum = [], tape = [], record = true) {
@@ -113,13 +117,18 @@ export function createVM(initMem, drum = [], tape = [], record = true) {
     const record = Math.floor(tapePos / RECORD_SPAN);
     if (io.kind === 'tape') tapePos++;
     if (wait) return view();
-    const addr = io.addr + io.done;
-    MEM[at(addr)] = io.kind === 'tape'
-      ? TAPE[record * RECORD_WORDS + io.done]
-      : DRUM[io.sector * SECTOR_WORDS + io.done];
-    io = { ...io, done: io.done + 1 };
-    if (io.done === (io.kind === 'tape' ? RECORD_WORDS : SECTOR_WORDS)) finish();
-    return view([], [addr]);
+    // A tape list shorter than its record leaves the rest uncopied, but the tape still moves on to the next record.
+    const writes = [];
+    if (io.done < io.count) {
+      const addr = io.addr + io.done;
+      MEM[at(addr)] = io.kind === 'tape'
+        ? TAPE[record * RECORD_WORDS + io.done]
+        : DRUM[(io.sector * SECTOR_WORDS + io.done) % DRUM.length];
+      writes.push(addr);
+      io = { ...io, done: io.done + 1 };
+    }
+    if (io.done === io.count && (io.kind === 'drum' || tapePos % RECORD_SPAN === 0)) finish();
+    return view([], writes);
   }
 
   function exec() {
@@ -173,11 +182,12 @@ export function createVM(initMem, drum = [], tape = [], record = true) {
     } else if (op === 'DRUM_READ') {
       const sector = read(b);
       if (sector < 0 || sector >= SECTORS) throw new Error(`No drum sector ${sector}`);
-      io = { kind: 'drum', sector, addr: read(a), done: 0 };
+      io = { kind: 'drum', sector, addr: read(a), done: 0, count: c };
       ip = pc;
     } else if (op === 'TAPE_READ') {
+      if (c > RECORD_WORDS) throw new Error(`Read-Write Check: a list of ${c} words is longer than the ${RECORD_WORDS}-word record`);
       if (tapePos >= RECORDS * RECORD_SPAN) throw new Error('End of tape');
-      io = { kind: 'tape', addr: MEM[m(a)], done: 0 };
+      io = { kind: 'tape', addr: MEM[m(a)], done: 0, count: c };
       ip = pc;
     } else if (op === 'REWIND') {
       if (tapePos) {
