@@ -137,11 +137,11 @@ export function createVM(initMem, drum = [], tape = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { kind: 'drum', sector: MEM[b], addr: a, done: 0 };
+      io = { kind: 'drum', sector: MEM[b], addr: MEM[a], done: 0 };
       ip = pc;
     } else if (op === 'TAPE_READ') {
       if (tapePos >= RECORDS * RECORD_SPAN) throw new Error('End of tape');
-      io = { kind: 'tape', addr: a, done: 0 };
+      io = { kind: 'tape', addr: MEM[a], done: 0 };
       ip = pc;
     } else if (op === 'REWIND') {
       if (tapePos) {

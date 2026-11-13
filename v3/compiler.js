@@ -1,4 +1,4 @@
-import { RECORD_WORDS, SECTOR_WORDS, encode } from './vm.js';
+import { encode } from './vm.js';
 
 const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
 
@@ -97,6 +97,12 @@ function build(source, memSize, dataBase) {
     return opnd.mode === 'IND' ? opnd.addr : defConst(opnd.addr);
   }
 
+  // A value held directly is already in place when it was computed there.
+  function store(place, src) {
+    if (place.mode === 'IND') emit('STORE_IND', place.addr, src, 0);
+    else if (src !== place.addr) emit('MOV', place.addr, src, 0);
+  }
+
   function parseDecl() {
     const name = eat();
     if (peek() !== '(') return { name, dims: null };
@@ -186,17 +192,13 @@ function build(source, memSize, dataBase) {
       } else if (tok === 'READ') {
         eat('READ');
         const device = eat();
-        const [op, words] = { TAPE: ['TAPE_READ', RECORD_WORDS], DRUM: ['DRUM_READ', SECTOR_WORDS] }[device] ?? [];
-        if (!op) throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
+        if (device !== 'DRUM' && device !== 'TAPE') throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
         let sector = 0;
-        if (op === 'DRUM_READ') {
+        if (device === 'DRUM') {
           sector = valAddr(parseExpr());
           eat(',');
         }
-        const buf = eat();
-        const v = getVar(buf);
-        if (v.isRef || span(v.dims) < words) throw new SyntaxError(`${device} destination '${buf}' must be a local array of at least ${words} cells`);
-        emit(op, v.addr, sector, 0);
+        emit(`${device}_READ`, ptrAddr(parseLValue()), sector, 0);
       } else if (tok === 'REWIND') {
         eat('REWIND');
         emit('REWIND', 0, 0, 0);
@@ -221,21 +223,21 @@ function build(source, memSize, dataBase) {
         eat('END');
       } else if (tok === 'DO') {
         eat('DO');
-        const name = eat();
-        const v = getVar(name);
-        if (v.isRef) throw new SyntaxError(`DO variable '${name}' cannot be a SUB argument`);
+        const v = parseLValue();
         eat('=');
         const start = valAddr(parseExpr());
         eat(',');
         const stop = valAddr(parseExpr());
-        emit('MOV', v.addr, start, 0);
+        store(v, start);
         const loopTop = code.length;
         const cmpTmp = alloc(1);
-        emit('<=', cmpTmp, v.addr, stop);
+        emit('<=', cmpTmp, valAddr(v), stop);
         const exitIdx = emit('JZ', 0, cmpTmp, 0);
         parseBlock();
         eat('END');
-        emit('+', v.addr, v.addr, defConst(1));
+        const next = valAddr(v);
+        emit('+', next, next, defConst(1));
+        store(v, next);
         emit('JMP', loopTop, 0, 0);
         patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
       } else if (tok === 'SUB') {
@@ -278,8 +280,7 @@ function build(source, memSize, dataBase) {
       } else {
         const lhs = parseLValue();
         eat('=');
-        const rhs = valAddr(parseExpr());
-        emit(lhs.mode === 'IND' ? 'STORE_IND' : 'MOV', lhs.addr, rhs, 0);
+        store(lhs, valAddr(parseExpr()));
       }
     }
   }

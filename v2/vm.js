@@ -108,7 +108,7 @@ export function createVM(initMem, drum = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { sector: MEM[b], addr: a, done: 0 };
+      io = { sector: MEM[b], addr: MEM[a], done: 0 };
       ip = pc;
     } else if (op in ALU) {
       reads.push(at(b), at(c));

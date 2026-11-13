@@ -200,7 +200,7 @@ test('v2 explains drum reads and computes MOD', () => {
   vm.step();
   assert.equal(effect(prog, vm.getState()), 'read drum sector S (3) -> B[0]..B[7], waiting 22 cycles first');
   const read = prog.code.find((instr) => instr[0] === 'DRUM_READ');
-  assert.match(describe(read, prog.cells), /^DRUM_READ \(read drum\): wait for drum sector M\[\d+\] S to reach the head, then copy its 8 words into M\[\d+\] B\[0\] onward$/);
+  assert.match(describe(read, prog.cells), /^DRUM_READ \(read drum\): wait for drum sector M\[\d+\] S to reach the head, then copy its 8 words into the cells from the address in M\[\d+\] const\(\d+\)$/);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [2]);
 });
@@ -208,13 +208,13 @@ test('v2 explains drum reads and computes MOD', () => {
 test('v2 scopes SUB locals, indexes a 2D SUB argument, and rejects what it cannot compile', () => {
   const src = ['I = 77', 'DIM G(2, 2)', 'SUB FILL(M)', '  DIM M(2, 2)', '  DO I = 0, 1', '    M[I, 1] = (I + 1) * 10', '  END', 'END', 'CALL FILL(G)', 'PRINT I', 'PRINT G[1, 1]'].join('\n');
   assert.deepEqual(run(src).getState().stdout, [77, 20]);
+  assert.deepEqual(run('SUB S(K)\n  DO K = 1, 3\n  END\nEND\nOUT = 0\nCALL S(OUT)\nPRINT OUT').getState().stdout, [4]);
   for (const [bad, message] of [
     ['X = 3.14', /Unexpected character '\.'/],
     ['X = 1\nEND\nPRINT X', /Unexpected 'END'/],
     ['X = 1\nELSE\nX = 2', /Unexpected 'ELSE'/],
     ['CALL NOPE()', /Undefined subroutine 'NOPE'/],
     ['X = 1\nY = X[0, 0]', /2D index on non-2D variable 'X'/],
-    ['SUB S(K)\n  DO K = 1, 3\n  END\nEND', /DO variable 'K' cannot be a SUB argument/],
     ['DIM SMALL(2)\nEQUIV BIG(5) = SMALL', /EQUIV 'BIG' must fit inside 'SMALL'/],
     ['EQUIV A(2) = MISSING', /EQUIV 'A' must fit inside 'MISSING'/],
   ]) assert.throws(() => layout(bad, MEM_SIZE), message);
@@ -232,11 +232,13 @@ test('v2 undoes a step that faults, so stepping again faults again', () => {
   assert.equal(effect(layout('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
 });
 
-test('v2 reads the drum only into a local array, and stops at the end of RAM', () => {
-  assert.throws(() => layout('DIM BIG(16)\nSUB LOAD(S, DST)\n  READ DRUM S, DST\nEND', MEM_SIZE), /DRUM destination 'DST' must be a local array of at least 8 cells/);
-  assert.throws(() => layout('READ DRUM 0, SCALAR', MEM_SIZE), /must be a local array of at least 8 cells/);
+test('v2 reads the drum into a SUB array argument, and stops at the end of RAM', () => {
+  const prog = layout('DIM BIG(16)\nSUB LOAD(S, DST)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', MEM_SIZE);
+  const vm = createVM(prog.initMem, drumLayout(1));
+  while (!vm.getState().halted) vm.step();
+  assert.deepEqual(vm.getState().stdout, [9, 16]);
   const mem = new Int32Array(MEM_SIZE);
-  mem[0] = encode(['DRUM_READ', MEM_SIZE - 3, 1, 0]);
+  mem.set([encode(['DRUM_READ', 1, 2, 0]), MEM_SIZE - 3, 1]);
   const edge = createVM(mem, drumLayout(1));
   assert.throws(() => { for (;;) edge.step(); }, new RegExp(`Memory address out of bounds: ${MEM_SIZE}`));
   assert.equal(edge.getState().io.done, 3);

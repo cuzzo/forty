@@ -150,13 +150,13 @@ test('v1 executes whatever is in memory, so overwriting code changes the program
 test('v1 scopes SUB locals, indexes a 2D SUB argument, and rejects what it cannot compile', () => {
   const src = ['I = 77', 'DIM G(2, 2)', 'SUB FILL(M)', '  DIM M(2, 2)', '  DO I = 0, 1', '    M[I, 1] = (I + 1) * 10', '  END', 'END', 'CALL FILL(G)', 'PRINT I', 'PRINT G[1, 1]'].join('\n');
   assert.deepEqual(run(src).getState().stdout, [77, 20]);
+  assert.deepEqual(run('SUB S(K)\n  DO K = 1, 3\n  END\nEND\nOUT = 0\nCALL S(OUT)\nPRINT OUT').getState().stdout, [4]);
   for (const [bad, message] of [
     ['X = 3.14', /Unexpected character '\.'/],
     ['X = 1\nEND\nPRINT X', /Unexpected 'END'/],
     ['X = 1\nELSE\nX = 2', /Unexpected 'ELSE'/],
     ['CALL NOPE()', /Undefined subroutine 'NOPE'/],
     ['X = 1\nY = X[0, 0]', /2D index on non-2D variable 'X'/],
-    ['SUB S(K)\n  DO K = 1, 3\n  END\nEND', /DO variable 'K' cannot be a SUB argument/],
     ['DIM SMALL(2)\nEQUIV BIG(5) = SMALL', /EQUIV 'BIG' must fit inside 'SMALL'/],
     ['EQUIV A(2) = MISSING', /EQUIV 'A' must fit inside 'MISSING'/],
   ]) assert.throws(() => layout(bad, MEM_SIZE), message);

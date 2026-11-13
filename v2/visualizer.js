@@ -89,7 +89,7 @@ export function effect(prog, state) {
   if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
   if (op === 'DRUM_READ') {
     const wait = waitCycles({ io: { sector: M[b], done: 0 }, cycles: state.cycles + 1 });
-    return `read drum sector ${val(b)} -> ${name(a)}..${name(a + SECTOR_WORDS - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
+    return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + SECTOR_WORDS - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
   }
   if (!(op in ALU)) return `unknown opcode ${op}`;
   return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[b], M[c])} -> ${name(a)}`;
@@ -107,7 +107,7 @@ export function describe([op, a, b, c], cells) {
   if (op === 'JAL') return `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`;
   if (op === 'JMP_IND') return `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`;
   if (op === 'JZ') return `JZ (jump if zero): if ${m(b)} is 0, go to instruction ${a}; else go to the next one`;
-  if (op === 'DRUM_READ') return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into ${m(a)} onward`;
+  if (op === 'DRUM_READ') return `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy its ${SECTOR_WORDS} words into the cells from the address in ${m(a)}`;
   return `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${ALU[op] && /[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
 }
 
