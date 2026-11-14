@@ -1,4 +1,4 @@
-import { MEM_WORDS, encode } from './vm.js';
+import { MEM_WORDS, encode, tagged } from './vm.js';
 
 // Puck v4's tokenizer, ported from examples/puck/v4/tokenizer.rb. Each token also keeps its line, for the page.
 const KEYWORDS = new Set(['PROCEDURE', 'RETURN', 'IF', 'THEN', 'LOOP', 'EXIT', 'END', 'SYSCALL']);
@@ -175,14 +175,15 @@ export function parse(tokens) {
   return parseStatements();
 }
 
-// The code generator, in place of Puck's stack-machine compiler: v5 4-tuples with the call stack in core memory.
-// Index register C holds the running procedure's frame, so slot k of a frame is the one operand k,C.
+// The code generator, in place of Puck's stack-machine compiler: v6's one-address 704 code, using all five registers.
+// The AC holds the value being worked out, and the MQ a product or quotient. Index register C holds the running
+// procedure's frame, so slot k of a frame is the one operand k,C; B holds the return address a call leaves.
 const C = 2;
-const ALU_OP = { '+': '+', '-': '-', '*': '*', '/': '/', '%': '%', '=': '==' };
+const B = 1;
 
 function at(slot) {
-  if (slot > 127) throw new RangeError(`A frame of ${slot + 1} words does not fit in an operand's 7 address bits`);
-  return slot | ((C + 1) << 7);
+  if (slot > 255) throw new RangeError(`A frame of ${slot + 1} words does not fit in an address's 8 bits`);
+  return tagged(slot, C);
 }
 
 // A frame is [ret, link, the parameters and locals by name], with temporaries above them. top is its first free
@@ -210,6 +211,8 @@ function build(source, dataBase) {
   const procs = [];
   let nextMem = dataBase;
   let line = 1;
+  // The value the AC holds, if any: a place that becomes a slot if the AC must be stored to make room.
+  let acHolds = null;
 
   function touch(addr) {
     refs[addr].add(line);
@@ -246,7 +249,6 @@ function build(source, dataBase) {
   }
 
   const baseCell = alloc('rodata', 'stack base');
-  const RET = alloc('linkage', 'RET');
   const main = frame('main', []);
 
   function claim(f, slots) {
@@ -262,40 +264,122 @@ function build(source, dataBase) {
     return 2 + k;
   }
 
-  // The operand holding an expression's value: a constant's cell, a variable's slot, or a temporary in the frame.
-  function value(e, f) {
-    if (e.type === 'Integer') return defConst(e.value);
-    if (e.type === 'Variable') return at(slotOf(f, e.name));
+  const cell = (addr) => ({ mode: 'MEM', addr });
+  const inAC = () => (acHolds = { mode: 'AC' });
+
+  // Store the AC's value in a temporary, so the AC can be used again: the place it held now names that slot.
+  function spill(f) {
+    if (!acHolds) return;
     const t = at(claim(f, 1));
-    into(e, t, f);
-    return t;
+    emit('STO', t);
+    Object.assign(acHolds, cell(t));
+    acHolds = null;
   }
 
-  // Work an expression out into the operand dest.
-  function into(e, dest, f) {
+  function load(place, f) {
+    if (place.mode === 'AC') return;
+    spill(f);
+    emit('CLA', place.addr);
+  }
+
+  // The address holding a place's value: a value in the AC is stored to a temporary first.
+  function operand(place, f) {
+    if (place.mode === 'AC') spill(f);
+    return place.addr;
+  }
+
+  // Where an expression's value is: a constant's cell, a variable's slot, a temporary, or the AC.
+  function value(e, f) {
+    if (e.type === 'Integer') return cell(defConst(e.value));
+    if (e.type === 'Variable') return cell(at(slotOf(f, e.name)));
     if (e.type === 'Call') {
       call(e, f);
-      // RETURN f(x) leaves f's result where it already is.
-      if (dest !== RET) emit('MOV', dest, RET);
-    } else if (e.type === 'Integer' || e.type === 'Variable') {
-      emit('MOV', dest, value(e, f));
-    } else {
-      emit(ALU_OP[e.value], dest, value(e.left, f), value(e.right, f));
+      return inAC();
     }
+    return ARITHMETIC[e.value](value(e.left, f), value(e.right, f), f);
   }
 
-  // The callee's frame starts at the caller's first free slot. Its header and arguments are claimed before the
-  // arguments are worked out, so a call inside an argument puts its own frame above them.
+  function addOrSubtract(op, l, r, f) {
+    const b = operand(r, f);
+    load(l, f);
+    emit(op, b);
+    return inAC();
+  }
+
+  // LDQ l, then MPY r leaves the product in the MQ; a cleared AC and DVP r, the quotient in the MQ and the
+  // remainder in the AC.
+  function multiplyOrDivide(op, l, r, f) {
+    const b = operand(r, f);
+    const a = operand(l, f);
+    spill(f);
+    emit('LDQ', a);
+    if (op === '*') {
+      emit('MPY', b);
+    } else {
+      emit('CLA', defConst(0));
+      emit('DVP', b);
+    }
+    if (op === '%') return inAC();
+    const t = at(claim(f, 1));
+    emit('STQ', t);
+    return cell(t);
+  }
+
+  // The 704 has no compare that leaves a value: subtract, and load 1 if that left 0, else 0.
+  function equal(l, r, f) {
+    addOrSubtract('SUB', l, r, f);
+    const toEqual = emit('TZE');
+    emit('CLA', defConst(0));
+    const toEnd = emit('TRA');
+    patch(toEqual, code.length);
+    emit('CLA', defConst(1));
+    patch(toEnd, code.length);
+    return inAC();
+  }
+
+  const ARITHMETIC = {
+    '+': (l, r, f) => addOrSubtract('ADD', l, r, f),
+    '-': (l, r, f) => addOrSubtract('SUB', l, r, f),
+    '*': (l, r, f) => multiplyOrDivide('*', l, r, f),
+    '/': (l, r, f) => multiplyOrDivide('/', l, r, f),
+    '%': (l, r, f) => multiplyOrDivide('%', l, r, f),
+    '=': equal,
+  };
+
+  // An IF's test, leaving the transfer to take when it is false. An = test subtracts: 0 means equal.
+  function condition(e, f) {
+    if (e.type === 'Equal') {
+      addOrSubtract('SUB', value(e.left, f), value(e.right, f), f);
+      return emit('TNZ');
+    }
+    load(value(e, f), f);
+    return emit('TZE');
+  }
+
+  // The AC does not survive a call, so a value in it is stored first. The callee's frame starts at the caller's
+  // first free slot, [ret, link, args], and its arguments are worked out straight into it. Then C moves to the new
+  // frame, and TSX leaves the call's own address in B and jumps. The result comes back in the AC.
   function call(e, f) {
     const proc = procs.find((p) => p.name === e.name);
     if (!proc) throw new Error(`key not found: "${e.name}"`);
+    spill(f);
     const base = claim(f, 2 + e.args.length);
-    e.args.forEach((arg, i) => into(arg, at(base + 2 + i), f));
-    emit('PXD', at(base + 1), C);
+    e.args.forEach((arg, i) => {
+      load(value(arg, f), f);
+      emit('STO', at(base + 2 + i));
+      acHolds = null;
+    });
+    emit('SXD', at(base + 1), 0, C);
     emit('TXI', code.length + 1, base, C);
-    emit('JAL', at(0), proc.entry);
-    emit('LXD', C, at(1));
+    emit('TSX', proc.entry, 0, B);
+    emit('LXD', at(1), 0, C);
     f.top = base;
+  }
+
+  // Back to the instruction after the call: B = ret, then TRA 1,B.
+  function returnFromCall() {
+    emit('LXD', at(0), 0, B);
+    emit('TRA', tagged(1, B));
   }
 
   function statements(nodes, f, exits) {
@@ -304,28 +388,32 @@ function build(source, dataBase) {
 
   function statement(node, f, exits) {
     line = node.line;
-    // A statement's temporaries die with it.
+    // A statement's temporaries die with it, and so does the value in the AC.
     f.top = 2 + f.names.length;
+    acHolds = null;
     STATEMENTS[node.type](node, f, exits);
   }
 
   function compileProcedure(node) {
-    const skip = emit('JMP');
+    const skip = emit('TRA');
     // Registered before its body, so that the body can call it: Puck v4 registered it after, and could not recurse.
     const proc = { ...frame(node.var, node.val.params), entry: code.length };
     procs.push(proc);
+    // The return address goes into the frame, as the body's own calls will reuse B.
+    emit('SXD', at(0), 0, B);
     statements(node.val.body, proc, null);
     line = node.endLine;
-    emit('JMP_IND', at(0));
+    returnFromCall();
     patch(skip, code.length);
   }
 
   function compileAssignment(node, f) {
     const known = f.names.indexOf(node.var);
-    if (known >= 0) return into(node.val, at(2 + known), f);
     // As in Puck, a new variable is named only after its value is worked out, so it cannot be read in it.
-    into(node.val, at(claim(f, 1)), f);
-    f.names.push(node.var);
+    const slot = known >= 0 ? 2 + known : claim(f, 1);
+    load(value(node.val, f), f);
+    emit('STO', at(slot));
+    if (known < 0) f.names.push(node.var);
   }
 
   function compileCall(node, f) {
@@ -333,7 +421,7 @@ function build(source, dataBase) {
   }
 
   function compileIf(node, f, exits) {
-    const toEnd = emit('JZ', 0, value(node.val.condition, f));
+    const toEnd = condition(node.val.condition, f);
     statements(node.val.body, f, exits);
     patch(toEnd, code.length);
   }
@@ -343,20 +431,20 @@ function build(source, dataBase) {
     const ends = [];
     statements(node.val, f, ends);
     line = node.endLine;
-    emit('JMP', top);
+    emit('TRA', top);
     for (const ip of ends) patch(ip, code.length);
   }
 
   function compileExit(node, f, exits) {
     if (!exits) throw new Error('EXIT outside LOOP');
-    exits.push(emit('JMP'));
+    exits.push(emit('TRA'));
   }
 
   function compileReturn(node, f) {
-    into(node.val, RET, f);
+    load(value(node.val, f), f);
     // The main program's RETURN ends it, as Puck's VM returns from running it.
     if (f === main) emit('HALT');
-    else emit('JMP_IND', at(0));
+    else returnFromCall();
   }
 
   function compileSyscall(node, f) {
@@ -375,7 +463,7 @@ function build(source, dataBase) {
     Syscall: compileSyscall,
   };
 
-  emit('LXD', C, baseCell);
+  emit('LXD', baseCell, 0, C);
   statements(ast, main, null);
   emit('HALT');
   // The stack starts where the data ends; main's frame there has ret and link 0, and link 0 ends the chain.

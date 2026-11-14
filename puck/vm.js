@@ -1,3 +1,3 @@
-// Puck runs on v5's machine unchanged: its index registers give a frame register, and its indexed operands give
-// frame-relative addressing.
-export * from '../v5/vm.js';
+// Puck runs on v6's machine unchanged, using all five of its registers: the AC and MQ for arithmetic, index register
+// C for the frame, and B for a call's return address.
+export * from '../v6/vm.js';

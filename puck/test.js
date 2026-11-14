@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile, parse, tokenize } from './compiler.js';
-import { MEM_WORDS, createVM } from './vm.js';
+import { MEM_WORDS, createVM, tagOf } from './vm.js';
 import { DEMOS, describe, effect, layout, stackLabels, stepper } from './visualizer.js';
 
 const C = 2;
+const B = 1;
 
 function run(source, record = false) {
   const prog = compile(source);
@@ -17,7 +18,7 @@ function run(source, record = false) {
 function runTo(source, until) {
   const prog = layout(source);
   const vm = createVM(prog.initMem);
-  while (!until(vm.getState(), prog)) vm.step();
+  while (!vm.getState().halted && !until(vm.getState(), prog)) vm.step();
   return { prog, vm, state: vm.getState() };
 }
 
@@ -87,20 +88,42 @@ test('puck keeps each call\'s frame in core memory: [ret, link, n, ...], linked 
 });
 
 test('puck names a frame from the moment C moves to it, and the effect line names slots, not cells', () => {
-  const { prog, state } = runTo(DEMOS.factorial.code, (s, p) => p.code[s.ip][0] === 'JAL' && s.XR[C] > p.stackBase);
-  assert.equal(stackLabels(prog, state)[state.XR[C] + 2], 'factorial.n');
-  assert.match(effect(prog, state), /^call \d+, return to \d+ -> factorial\.ret \[via C\]$/);
-  const jmpInd = prog.code.find(([op]) => op === 'JMP_IND');
-  const returns = 'JMP_IND (jump indirect): go to the instruction whose number is in M[0 + C] (return from SUB)';
-  assert.equal(describe(jmpInd, prog.cells), returns);
-  const back = runTo(DEMOS.factorial.code, (s, p) => p.code[s.ip][0] === 'JMP_IND' && s.XR[C] > p.stackBase).state;
-  assert.match(effect(prog, back), /^return to \d+ \(from factorial\.ret \[via C\]\)$/);
+  const calling = runTo(DEMOS.factorial.code, (s, p) => p.code[s.ip][0] === 'TSX' && s.XR[C] > p.stackBase);
+  assert.equal(stackLabels(calling.prog, calling.state)[calling.state.XR[C] + 2], 'factorial.n');
+  assert.match(effect(calling.prog, calling.state), /^call \d+: \d+ \(this instruction\) -> index register B$/);
+  // The callee's first instruction saves the return address TSX left in B into the frame.
+  const entered = runTo(DEMOS.factorial.code, (s, p) => s.ip === p.procs[0].entry);
+  assert.equal(stackLabels(entered.prog, entered.state)[entered.state.XR[C]], 'factorial.ret');
+  assert.match(effect(entered.prog, entered.state), /^index register B \(\d+\) -> factorial\.ret \[via C\]$/);
+  const { prog } = calling;
+  const returning = prog.code.find((instr) => instr[0] === 'TRA' && tagOf(instr[1]) === B + 1);
+  const returns = 'TRA (transfer): go to instruction 1 + index register B (return from SUB)';
+  assert.equal(describe(returning, prog.cells), returns);
+  const isReturn = (instr) => instr[0] === 'TRA' && tagOf(instr[1]);
+  const back = runTo(DEMOS.factorial.code, (s, p) => isReturn(p.code[s.ip]) && s.XR[C] > p.stackBase).state;
+  assert.match(effect(prog, back), /^return to \d+ \(B \+ 1\)$/);
   assert.deepEqual(stackLabels(prog, createVM(prog.initMem).getState()), []);
 });
 
-test('puck fits fib(10) in 128 words, stops on a stack that does not, and undoes every step', () => {
+test('puck works expressions out in the AC and MQ, and stores the AC before a call, which does not keep it', () => {
+  const fib = layout(DEMOS.fib.code);
+  const ops = fib.code.map(([op]) => op);
+  const firstCall = ops.indexOf('TSX');
+  // After the first call, fib(n - 1)'s result is stored in the frame before fib(n - 2) is worked out.
+  assert.deepEqual(ops.slice(firstCall, firstCall + 3), ['TSX', 'LXD', 'STO']);
+  assert.ok(tagOf(fib.code[firstCall + 2][1]) === C + 1);
+  const factorial = layout(DEMOS.factorial.code).code.map(([op]) => op);
+  assert.ok(['LDQ', 'MPY', 'STQ'].every((op) => factorial.includes(op)));
+  const equal = 'r := 3 = 3;\nSYSCALL(1, r);\nq := 3 = 4;\nSYSCALL(1, q);\nd := 7 / 2;\nSYSCALL(1, d);';
+  assert.deepEqual(run(equal).state.stdout, [1, 0, 3]);
+  // A test that is not a comparison is false when it is 0 (in Puck's Ruby VM, only false is false).
+  const truth = 'x := 0;\nIF x THEN\n  SYSCALL(1, x);\nEND;\ny := 2;\nIF y THEN\n  SYSCALL(1, y);\nEND;';
+  assert.deepEqual(run(truth).state.stdout, [2]);
+});
+
+test('puck fits fib(10) in 256 words, stops on a stack that does not, and undoes every step', () => {
   const { prog, vm, state } = run(DEMOS.fib.code, true);
-  assert.equal(MEM_WORDS, 128);
+  assert.equal(MEM_WORDS, 256);
   assert.ok(state.steps > 1000);
   const nav = stepper(vm, () => 0);
   vm.reset();
@@ -109,8 +132,9 @@ test('puck fits fib(10) in 128 words, stops on a stack that does not, and undoes
   assert.ok(deepest + prog.procs[0].slots.length <= MEM_WORDS, `${deepest}`);
   while (vm.getState().steps) nav.back();
   assert.deepEqual([vm.getState().ip, vm.getState().XR[C]], [0, 0]);
-  assert.throws(() => run(DEMOS.fib.code.replace('fib(10)', 'fib(40)')), /Memory address out of bounds: 128/);
-  const params = Array.from({ length: 130 }, (_, i) => `a${i}`).join(', ');
-  const huge = `PROCEDURE big(${params});\nEND;\nbig(${Array(130).fill(0).join(', ')});`;
-  assert.throws(() => compile(huge), /does not fit in an operand's 7 address bits/);
+  const tooDeep = DEMOS.fib.code.replace('fib(10)', 'fib(80)');
+  assert.throws(() => run(tooDeep), /Memory address out of bounds: 2[5-9]\d/);
+  const params = Array.from({ length: 260 }, (_, i) => `a${i}`).join(', ');
+  const huge = `PROCEDURE big(${params});\nEND;\nbig(${Array(260).fill(0).join(', ')});`;
+  assert.throws(() => compile(huge), /does not fit in an address's 8 bits/);
 });

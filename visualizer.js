@@ -206,7 +206,7 @@ function effect704([op, a, b, c], state, { ea, name, val }, { TESTS, tagOf, addr
     STQ: () => `${mq} -> ${name(a)}`,
     MPY: () => `${mq} * ${val(a)} = ${Math.imul(state.MQ, M[ea(a)])} -> MQ`,
     DVP: () => (M[ea(a)] ? `${mq} / ${val(a)} = ${(state.MQ / M[ea(a)]) | 0} -> MQ, remainder ${state.MQ % M[ea(a)] | 0} -> AC` : `${mq} / ${val(a)}: division by zero`),
-    TRA: () => (tagOf(a) ? `return to ${ea(a)} (C + ${addrOf(a)})` : `go to ${a}`),
+    TRA: () => (tagOf(a) ? `return to ${ea(a)} (${reg(tagOf(a) - 1)} + ${addrOf(a)})` : `go to ${a}`),
     TSX: () => `call ${a}: ${state.ip} (this instruction) -> index register ${reg(c)}`,
     LXD: () => `${val(a)} -> index register ${reg(c)}`,
     SXD: () => `${xr(c)} -> ${name(a)}`,
@@ -242,14 +242,21 @@ function describe704([op, a, b, c], m, { tagOf, addrOf }) {
   return TEXT[op]?.() ?? `${op}: unknown opcode`;
 }
 
-// The procedure whose frame starts at cell c (puck/). main's is at the base of the stack. Any other was entered by a
-// JAL, which wrote its return address into the frame's first cell: the JAL just before that address names the
-// procedure. A frame C has just moved to has no return address yet, and the JAL about to run names it.
+// Which operand of a call instruction names the routine it goes to.
+const CALL_TARGET = { JAL: 2, TSX: 1 };
+const callTarget = (instr) => instr?.[CALL_TARGET[instr[0]]];
+
+// The procedure whose frame starts at cell c (puck/, lisp/). main's is at the base of the stack. A frame C has just
+// moved to is named by the call about to run, or by the procedure about to start. Any other frame holds the return
+// address its call left in its first cell: JAL leaves the next instruction's address, and TSX its own, so the call is
+// at that address or the one before it.
 function frameOwner(prog, state, c) {
   if (c === prog.stackBase) return prog.main;
-  const next = prog.code[state.ip];
-  const entered = c === state.XR[2] && next?.[0] === 'JAL' ? next : prog.code[state.MEM[c] - 1];
-  return prog.procs.find((p) => p.entry === entered?.[2]);
+  const procAt = (entry) => prog.procs.find((p) => p.entry === entry);
+  const entering = c === state.XR[2] && (procAt(callTarget(prog.code[state.ip])) ?? procAt(state.ip));
+  if (entering) return entering;
+  const ret = state.MEM[c];
+  return procAt(callTarget(prog.code[ret]) ?? callTarget(prog.code[ret - 1]));
 }
 
 // The cells of a call stack in core memory (puck/), each named procedure.slot: from the frame in index register C
@@ -332,7 +339,7 @@ export function visualizer({ compiler, vm, features, drumSkip = 9, demos: ownDem
     const [op, a, b, c] = instr;
     if (!ibm704) return instr.map((x, k) => (k ? operand(x) : x)).join(' ');
     if (NO_OPERAND.has(op)) return op;
-    if (REG_OPS.has(op)) return `${op} ${a},${reg(c)}${op === 'TXI' || op === 'TXH' ? `,${operand(b)}` : ''}`;
+    if (REG_OPS.has(op)) return `${op} ${operand(a)},${reg(c)}${op === 'TXI' || op === 'TXH' ? `,${operand(b)}` : ''}`;
     return `${op} ${operand(a)}${op === 'DRUM_READ' ? ` ${operand(b)}` : ''}`;
   }
 

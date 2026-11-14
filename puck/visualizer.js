@@ -70,7 +70,7 @@ export const DEMOS = {
 export const { MEM_SIZE, layout, effect, describe, asm, mount } = visualizer({
   compiler,
   vm,
-  features: ['code', 'stack'],
+  features: ['code', 'stack', 'accumulator'],
   demos: DEMOS,
   language: 'PUCK',
 });
