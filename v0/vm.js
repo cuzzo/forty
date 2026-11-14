@@ -11,6 +11,9 @@ export const ALU = {
   '>=': (x, y) => +(x >= y),
 };
 
+// Memory: 64 words. v0's program is not in memory, so data has it all.
+export const MEM_WORDS = 64;
+
 export function createVM(code, initMem) {
   const MEM = new Int32Array(initMem);
   const stdout = [];

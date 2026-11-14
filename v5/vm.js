@@ -28,6 +28,9 @@ export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (
 export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 18) & 511, (word >>> 9) & 511, word & 511];
 
 // record = false runs without the history Back needs, for measuring a program to the end.
+// Memory: 128 words, all an operand's 7 address bits can name.
+export const MEM_WORDS = 128;
+
 export function createVM(initMem, drum = [], tape = [], record = true) {
   const MEM = new Int32Array(initMem);
   const XR = new Int32Array(3);

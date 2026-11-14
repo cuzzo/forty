@@ -23,6 +23,9 @@ const OPS = ['HALT', 'MOV', 'LOAD_IND', 'STORE_IND', 'PRINT', 'JMP', 'JAL', 'JMP
 export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
 export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 18) & 511, (word >>> 9) & 511, word & 511];
 
+// Memory: 128 words, program included.
+export const MEM_WORDS = 128;
+
 export function createVM(initMem, drum = []) {
   const MEM = new Int32Array(initMem);
   const DRUM = new Int32Array(SECTORS * SECTOR_WORDS);

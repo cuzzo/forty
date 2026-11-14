@@ -103,29 +103,27 @@ function deviceEffect(state, name) {
   return `drum sector ${Math.floor(k / SECTOR_WORDS)} word ${k % SECTOR_WORDS} (${state.DRUM[k]}) -> ${name(addr + done)}`;
 }
 
-// The input and output instructions, which both instruction sets share; undefined for any other.
-function ioEffect([op, a, b, c], state, { name, val }, readCost) {
+// The instructions both sets write the same way: input and output, and the index register loop. Undefined for others.
+function sharedEffect([op, a, b, c], state, { ea, name, val }, readCost) {
   const M = state.MEM;
+  const XR = state.XR;
   const record = Math.floor(state.tapePos / RECORD_SPAN);
-  if (op === 'HALT') return 'halt';
-  if (op === 'PRINT') return `print ${val(a)}`;
-  if (op === 'CARD') return `put ${val(a)} in field ${state.pending.length + 1} of the card`;
-  if (op === 'PUNCH') return `punch the card (${state.pending.join(', ')}), taking ${cyc(CARD_ROWS * ROW_CYCLES)}`;
-  if (op === 'DRUM_READ') {
-    const wait = ioWait({ io: { kind: 'drum', sector: M[b], done: 0 }, cycles: state.cycles + readCost });
-    return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + c - 1)}, waiting ${cyc(wait)} first`;
-  }
-  if (op === 'TAPE_READ') {
-    const wait = ioWait({ io: { kind: 'tape', done: 0, count: c }, tapePos: state.tapePos });
-    return `read tape record ${record + 1} -> ${name(M[a])}..${name(M[a] + c - 1)}, waiting ${cyc(wait)} first`;
-  }
-  if (op === 'REWIND') {
-    return state.tapePos ? `rewind the tape from record ${record + 1}: ${cyc(ioWait({ io: { kind: 'rewind' }, tapePos: state.tapePos }))}` : 'rewind: tape already at the start';
-  }
-  return undefined;
+  const read = (what, wait) => `${what} -> ${name(M[a])}..${name(M[a] + c - 1)}, waiting ${cyc(wait)} first`;
+  const TEXT = {
+    HALT: () => 'halt',
+    PRINT: () => `print ${val(a)}`,
+    CARD: () => `put ${val(a)} in field ${state.pending.length + 1} of the card`,
+    PUNCH: () => `punch the card (${state.pending.join(', ')}), taking ${cyc(CARD_ROWS * ROW_CYCLES)}`,
+    DRUM_READ: () => read(`read drum sector ${val(b)}`, ioWait({ io: { kind: 'drum', sector: M[b], done: 0 }, cycles: state.cycles + readCost })),
+    TAPE_READ: () => read(`read tape record ${record + 1}`, ioWait({ io: { kind: 'tape', done: 0, count: c }, tapePos: state.tapePos })),
+    REWIND: () => (state.tapePos ? `rewind the tape from record ${record + 1}: ${cyc(ioWait({ io: { kind: 'rewind' }, tapePos: state.tapePos }))}` : 'rewind: tape already at the start'),
+    TXH: () => (XR[c] > M[ea(b)] ? `${reg(c)} (${XR[c]}) > ${val(b)}: leave the loop, go to ${a}` : `${reg(c)} (${XR[c]}) <= ${val(b)}: next`),
+    TXI: () => `${reg(c)} = ${XR[c]} + ${b} = ${XR[c] + b}, go to ${a}`,
+  };
+  return TEXT[op]?.();
 }
 
-const IO_TEXT = {
+const SHARED_TEXT = {
   HALT: () => 'HALT: stop the program',
   PRINT: (m, a) => `PRINT: print ${m(a)}`,
   CARD: (m, a) => `CARD: put ${m(a)} in the next 10-column field of the card being made up`,
@@ -133,41 +131,42 @@ const IO_TEXT = {
   TAPE_READ: (m, a, b, c) => `TAPE_READ (read tape): start the tape, then copy the first ${c} words of the next record into the cells from the address in ${m(a)}`,
   REWIND: () => 'REWIND: wind the tape back to the start',
   DRUM_READ: (m, a, b, c) => `DRUM_READ (read drum): wait for drum sector ${m(b)} to reach the head, then copy ${c} words from there on into the cells from the address in ${m(a)}`,
+  TXH: (m, a, b, c) => `TXH (transfer on index high): if index register ${reg(c)} > ${m(b)}, go to instruction ${a}`,
+  TXI: (m, a, b, c) => `TXI (transfer with index incremented): add ${b} to index register ${reg(c)}, go to instruction ${a}`,
 };
 
 // v0-v5's 4-tuples: [op, a, b, c], memory to memory.
 function tupleEffect([op, a, b, c], state, { ea, label, name, val }, ALU) {
   const M = state.MEM;
-  const XR = state.XR;
   const via = (i) => `*${name(i)} = ${label(M[ea(i)])} [${M[ea(i)]}]`;
-  if (op === 'MOV') return `${val(b)} -> ${name(a)}`;
-  if (op === 'LOAD_IND') return `${via(b)} (${M[M[ea(b)]]}) -> ${name(a)}`;
-  if (op === 'STORE_IND') return `${val(b)} -> ${via(a)}`;
-  if (op === 'LXD') return `${val(b)} -> index register ${reg(a)}`;
-  if (op === 'PXD') return `index register ${reg(b)} (${XR[b]}) -> ${name(a)}`;
-  if (op === 'TXH') return XR[c] > M[ea(b)] ? `${reg(c)} (${XR[c]}) > ${val(b)}: leave the loop, go to ${a}` : `${reg(c)} (${XR[c]}) <= ${val(b)}: next`;
-  if (op === 'TXI') return `${reg(c)} = ${XR[c]} + ${b} = ${XR[c] + b}, go to ${a}`;
-  if (op === 'JMP') return `jump to ${a}`;
-  if (op === 'JAL') return `call ${b}, return to ${state.ip + 1} -> ${name(a)}`;
-  if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
-  if (op === 'JZ') return M[ea(b)] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
-  if (!(op in ALU)) return `unknown opcode ${op}`;
-  return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[ea(b)], M[ea(c)])} -> ${name(a)}`;
+  const TEXT = {
+    MOV: () => `${val(b)} -> ${name(a)}`,
+    LOAD_IND: () => `${via(b)} (${M[M[ea(b)]]}) -> ${name(a)}`,
+    STORE_IND: () => `${val(b)} -> ${via(a)}`,
+    LXD: () => `${val(b)} -> index register ${reg(a)}`,
+    PXD: () => `index register ${reg(b)} (${state.XR[b]}) -> ${name(a)}`,
+    JMP: () => `jump to ${a}`,
+    JAL: () => `call ${b}, return to ${state.ip + 1} -> ${name(a)}`,
+    JMP_IND: () => `return to ${M[a]} (from ${name(a)})`,
+    JZ: () => (M[ea(b)] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`),
+  };
+  if (op in ALU) return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[ea(b)], M[ea(c)])} -> ${name(a)}`;
+  return TEXT[op]?.() ?? `unknown opcode ${op}`;
 }
 
-function tupleDescribe([op, a, b, c], m, ALU) {
-  if (op === 'LXD') return `LXD (load index from decrement): index register ${reg(a)} = ${m(b)}`;
-  if (op === 'PXD') return `PXD (place index in decrement): ${m(a)} = index register ${reg(b)}`;
-  if (op === 'TXH') return `TXH (transfer on index high): if index register ${reg(c)} > ${m(b)}, go to instruction ${a}`;
-  if (op === 'TXI') return `TXI (transfer with index incremented): add ${b} to index register ${reg(c)}, go to instruction ${a}`;
-  if (op === 'MOV') return `MOV (move): copy ${m(b)} into ${m(a)}`;
-  if (op === 'LOAD_IND') return `LOAD_IND (load indirect): ${m(b)} holds an address; copy the cell at that address into ${m(a)}`;
-  if (op === 'STORE_IND') return `STORE_IND (store indirect): ${m(a)} holds an address; copy ${m(b)} into the cell at that address`;
-  if (op === 'JMP') return `JMP (jump): go to instruction ${a}`;
-  if (op === 'JAL') return `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`;
-  if (op === 'JMP_IND') return `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`;
-  if (op === 'JZ') return `JZ (jump if zero): if ${m(b)} is 0, go to instruction ${a}; else go to the next one`;
-  return `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${ALU[op] && /[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
+function tupleDescribe([op, a, b, c], m) {
+  const TEXT = {
+    LXD: () => `LXD (load index from decrement): index register ${reg(a)} = ${m(b)}`,
+    PXD: () => `PXD (place index in decrement): ${m(a)} = index register ${reg(b)}`,
+    MOV: () => `MOV (move): copy ${m(b)} into ${m(a)}`,
+    LOAD_IND: () => `LOAD_IND (load indirect): ${m(b)} holds an address; copy the cell at that address into ${m(a)}`,
+    STORE_IND: () => `STORE_IND (store indirect): ${m(a)} holds an address; copy ${m(b)} into the cell at that address`,
+    JMP: () => `JMP (jump): go to instruction ${a}`,
+    JAL: () => `JAL (jump and link): save the return address in ${m(a)}, go to instruction ${b}`,
+    JMP_IND: () => `JMP_IND (jump indirect): go to the instruction whose number is in ${m(a)} (return from SUB)`,
+    JZ: () => `JZ (jump if zero): if ${m(b)} is 0, go to instruction ${a}; else go to the next one`,
+  };
+  return TEXT[op]?.() ?? `${op}: ${m(a)} = ${m(b)} ${op} ${m(c)}${/[<>=!]/.test(op) ? ' (1 if true, 0 if false)' : ''}`;
 }
 
 // Cycles an instruction saves each time it runs, against the same program compiled without index registers
@@ -188,35 +187,33 @@ export function saving(instr) {
 // v6's 704 instructions: one address (with its tag), a decrement, and an index register or a READ's word count.
 const REG_OPS = new Set(['TSX', 'LXD', 'SXD', 'PXD', 'PAX', 'TXI', 'TXH']);
 const NO_OPERAND = new Set(['HALT', 'PUNCH', 'REWIND']);
+// What each AC test says when it holds and when it does not.
+const TEST_WORDS = { TZE: ['is 0', 'is not 0'], TNZ: ['is not 0', 'is 0'], TMI: ['< 0', '>= 0'], TPL: ['>= 0', '< 0'] };
 
 function effect704([op, a, b, c], state, { ea, name, val }, { TESTS, tagOf, addrOf }) {
   const M = state.MEM;
-  const XR = state.XR;
-  const xr = (r) => `index register ${reg(r)} (${XR[r]})`;
+  const xr = (r) => `index register ${reg(r)} (${state.XR[r]})`;
   const ac = `AC (${state.AC})`;
   const mq = `MQ (${state.MQ})`;
-  if (op === 'CLA') return `${val(a)} -> AC`;
-  if (op === 'CLS') return `-${val(a)} = ${-M[ea(a)] | 0} -> AC`;
-  if (op === 'ADD') return `${ac} + ${val(a)} = ${(state.AC + M[ea(a)]) | 0} -> AC`;
-  if (op === 'SUB') return `${ac} - ${val(a)} = ${(state.AC - M[ea(a)]) | 0} -> AC`;
-  if (op === 'STO') return `${ac} -> ${name(a)}`;
-  if (op === 'LDQ') return `${val(a)} -> MQ`;
-  if (op === 'STQ') return `${mq} -> ${name(a)}`;
-  if (op === 'MPY') return `${mq} * ${val(a)} = ${Math.imul(state.MQ, M[ea(a)])} -> MQ`;
-  if (op === 'DVP') return M[ea(a)] ? `${mq} / ${val(a)} = ${(state.MQ / M[ea(a)]) | 0} -> MQ, remainder ${state.MQ % M[ea(a)] | 0} -> AC` : `${mq} / ${val(a)}: division by zero`;
-  if (op === 'TRA') return tagOf(a) ? `return to ${ea(a)} (C + ${addrOf(a)})` : `go to ${a}`;
-  if (op in TESTS) {
-    const [yes, no] = { TZE: ['is 0', 'is not 0'], TNZ: ['is not 0', 'is 0'], TMI: ['< 0', '>= 0'], TPL: ['>= 0', '< 0'] }[op];
-    return TESTS[op](state.AC) ? `${ac} ${yes}: go to ${a}` : `${ac} ${no}: next`;
-  }
-  if (op === 'TSX') return `call ${a}: ${state.ip} (this instruction) -> index register ${reg(c)}`;
-  if (op === 'LXD') return `${val(a)} -> index register ${reg(c)}`;
-  if (op === 'SXD') return `${xr(c)} -> ${name(a)}`;
-  if (op === 'PXD') return `${xr(c)} -> AC`;
-  if (op === 'PAX') return `${ac} -> index register ${reg(c)}`;
-  if (op === 'TXH') return XR[c] > M[ea(b)] ? `${reg(c)} (${XR[c]}) > ${val(b)}: leave the loop, go to ${a}` : `${reg(c)} (${XR[c]}) <= ${val(b)}: next`;
-  if (op === 'TXI') return `${reg(c)} = ${XR[c]} + ${b} = ${XR[c] + b}, go to ${a}`;
-  return `unknown opcode ${op}`;
+  const TEXT = {
+    CLA: () => `${val(a)} -> AC`,
+    CLS: () => `-${val(a)} = ${-M[ea(a)] | 0} -> AC`,
+    ADD: () => `${ac} + ${val(a)} = ${(state.AC + M[ea(a)]) | 0} -> AC`,
+    SUB: () => `${ac} - ${val(a)} = ${(state.AC - M[ea(a)]) | 0} -> AC`,
+    STO: () => `${ac} -> ${name(a)}`,
+    LDQ: () => `${val(a)} -> MQ`,
+    STQ: () => `${mq} -> ${name(a)}`,
+    MPY: () => `${mq} * ${val(a)} = ${Math.imul(state.MQ, M[ea(a)])} -> MQ`,
+    DVP: () => (M[ea(a)] ? `${mq} / ${val(a)} = ${(state.MQ / M[ea(a)]) | 0} -> MQ, remainder ${state.MQ % M[ea(a)] | 0} -> AC` : `${mq} / ${val(a)}: division by zero`),
+    TRA: () => (tagOf(a) ? `return to ${ea(a)} (C + ${addrOf(a)})` : `go to ${a}`),
+    TSX: () => `call ${a}: ${state.ip} (this instruction) -> index register ${reg(c)}`,
+    LXD: () => `${val(a)} -> index register ${reg(c)}`,
+    SXD: () => `${xr(c)} -> ${name(a)}`,
+    PXD: () => `${xr(c)} -> AC`,
+    PAX: () => `${ac} -> index register ${reg(c)}`,
+  };
+  if (op in TESTS) return TESTS[op](state.AC) ? `${ac} ${TEST_WORDS[op][0]}: go to ${a}` : `${ac} ${TEST_WORDS[op][1]}: next`;
+  return TEXT[op]?.() ?? `unknown opcode ${op}`;
 }
 
 function describe704([op, a, b, c], m, { tagOf, addrOf }) {
@@ -240,13 +237,11 @@ function describe704([op, a, b, c], m, { tagOf, addrOf }) {
     SXD: () => `SXD (store index in decrement): ${m(a)} = index register ${reg(c)}`,
     PXD: () => `PXD (place index in decrement): AC = index register ${reg(c)}`,
     PAX: () => `PAX (place address in index): index register ${reg(c)} = AC`,
-    TXH: () => `TXH (transfer on index high): if index register ${reg(c)} > ${m(b)}, go to instruction ${a}`,
-    TXI: () => `TXI (transfer with index incremented): add ${b} to index register ${reg(c)}, go to instruction ${a}`,
   };
   return TEXT[op]?.() ?? `${op}: unknown opcode`;
 }
 
-export function visualizer({ compiler, vm, memSize, features, drumSkip = 9 }) {
+export function visualizer({ compiler, vm, features, drumSkip = 9 }) {
   const has = (feature) => features.includes(feature);
   const ibm704 = has('accumulator');
   const tagOf = vm.tagOf ?? (() => 0);
@@ -264,9 +259,9 @@ export function visualizer({ compiler, vm, memSize, features, drumSkip = 9 }) {
   }
 
   // The compiler's output plus each memory cell's role and label, built from its allocations.
-  function layout(source, size = memSize, registers = undefined) {
-    const prog = compiler.compile(source, size, registers);
-    const cells = Array.from({ length: prog.initMem.length }, (_, i) => (i < prog.codeLen ? { role: 'code', label: asm(prog.code[i]) } : { role: 'unused', label: '' }));
+  function layout(source, registers = undefined) {
+    const prog = compiler.compile(source, registers);
+    const cells = Array.from({ length: prog.initMem.length }, (_, i) => ({ role: i < prog.codeLen ? 'code' : 'unused', label: '' }));
     for (const { kind, base, size: n, role, label } of prog.events) {
       if (kind !== 'alloc') continue;
       for (let i = 0; i < n; i++) cells[base + i] = { role, label: n > 1 ? `${label}[${i}]` : (label || `tmp_${base + i}`) };
@@ -288,19 +283,58 @@ export function visualizer({ compiler, vm, memSize, features, drumSkip = 9 }) {
     const names = { ea, label, name, val: (i) => `${name(i)} (${M[ea(i)]})` };
     if (state.io) return deviceEffect(state, name);
     const instr = instruction(prog, M, state.ip);
-    return ioEffect(instr, state, names, ibm704 ? COST_704.DRUM_READ ?? 2 : COST.DRUM_READ)
+    return sharedEffect(instr, state, names, ibm704 ? COST_704.DRUM_READ ?? 2 : COST.DRUM_READ)
       ?? (ibm704 ? effect704(instr, state, names, { TESTS: vm.TESTS, tagOf, addrOf }) : tupleEffect(instr, state, names, vm.ALU));
   }
 
   // Hover text for one instruction: the opcode's name and what it does with these operands.
   function describe(instr, cells) {
-    const m = (i) => (tagOf(i) ? `M[${addrOf(i)} + ${reg(tagOf(i) - 1)}] ${cells[addrOf(i)]?.label ?? ''} onward` : `M[${i}] ${cells[i]?.label ?? ''}`).trim();
-    return IO_TEXT[instr[0]]?.(m, ...instr.slice(1)) ?? (ibm704 ? describe704(instr, m, { tagOf, addrOf }) : tupleDescribe(instr, m, vm.ALU));
+    // An indexed operand names its base cell only when that is data: a pointer in C has base 0, a code cell.
+    const m = (i) => {
+      const label = cells[addrOf(i)]?.label;
+      if (!tagOf(i)) return `M[${i}] ${label ?? ''}`.trim();
+      return `M[${addrOf(i)} + ${reg(tagOf(i) - 1)}]${label ? ` ${label} onward` : ''}`;
+    };
+    return SHARED_TEXT[instr[0]]?.(m, ...instr.slice(1)) ?? (ibm704 ? describe704(instr, m, { tagOf, addrOf }) : tupleDescribe(instr, m));
   }
 
-  const mount = () => mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, instruction, emitRiscv: compiler.emitRiscv });
-  return { MEM_SIZE: memSize, DEMOS, layout, effect, describe, asm, saving, mount };
+  const mount = () => mountPage({ has, vm, DEMOS, layout, effect, describe, asm, instruction, emitRiscv: compiler.emitRiscv });
+  return { MEM_SIZE: vm.MEM_WORDS, DEMOS, layout, effect, describe, asm, saving, mount };
 }
+
+// Next and Previous over a VM. One advance is one instruction, one word read, one card row punched, or up to one
+// sector of a device wait. Each records the VM's step count before it, so back() undoes exactly one advance, even one
+// a fault cut short. gainAt(state): the cycles the index registers save on the instruction about to run.
+export function stepper(machine, gainAt) {
+  const batches = [];
+  return {
+    advance() {
+      const s = machine.getState();
+      const batch = { steps: s.steps, gain: gainAt(s) };
+      const ran = () => machine.getState().steps - batch.steps;
+      let last;
+      let io;
+      try {
+        do {
+          last = machine.step();
+          io = machine.getState().io;
+        } while (io && io.done === s.io?.done && ran() < (io.kind === 'punch' ? ROW_CYCLES : SECTOR_WORDS * DRUM_WORD_CYCLES));
+      } finally {
+        // A step that faults is undone by the VM, but the steps before it in this advance stay.
+        if (ran()) batches.push(batch);
+      }
+      return last;
+    },
+    back() {
+      const { steps } = batches.pop() ?? { steps: 0 };
+      while (machine.getState().steps > steps) machine.stepBack();
+    },
+    saved: () => batches.reduce((sum, { gain }) => sum + gain, 0),
+  };
+}
+
+// The DO variable index register r holds while pc is inside its loop; none before the first step, when pc is null.
+export const holderOf = (regLoops, r, pc) => (pc === null ? undefined : regLoops.find((l) => l.reg === r && pc >= l.from && pc < l.to)?.name);
 
 function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
@@ -391,7 +425,7 @@ function page(has) {
   </div>`;
 }
 
-function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, instruction, emitRiscv }) {
+function mountPage({ has, vm, DEMOS, layout, effect, describe, asm, instruction, emitRiscv }) {
   document.body.innerHTML = page(has);
   const $ = (id) => document.getElementById(id);
   const demoSel = $('demo');
@@ -412,18 +446,16 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
   // v4: the program's RV32IM assembly, one line per row, or why it has none.
   let riscv = [];
   let machine = null;
+  let run = null;
   let last = { reads: [], writes: [] };
   let timer = null;
   let building = null;
-  // How many VM steps each advance() took, and what the index registers saved in it, so Previous undoes the same.
-  const batches = [];
-  // v5: cycles the index registers have saved so far this run, and the whole run's instruction cycles with and
-  // without them.
-  let saved = 0;
+  // v5: the whole run's instruction cycles with and without index registers.
   let runWith = '?';
   let runWithout = '?';
 
   const demo = () => DEMOS[demoSel.value];
+  const devices = () => [demo().drum ?? drumLayout(1), demo().tape ?? TAPE_DATA];
 
   function drawArrow() {
     arrowSvg.replaceChildren();
@@ -448,7 +480,7 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
   }
 
   // A reel: the sector under the head in the middle, the one just gone above, the next one below.
-  function renderDrum(words, cycles, io) {
+  function renderDrum({ DRUM: words, cycles, io }) {
     const head = headAt(cycles);
     // A read starts at its sector and runs on through the following ones.
     const drumIo = io?.sector === undefined ? null : io;
@@ -468,7 +500,7 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
   }
 
   // The tape moving past a fixed head in the middle, one word's length of tape per cell: each record is its gap, then its words.
-  function renderTape(words, pos, io) {
+  function renderTape({ TAPE: words, tapePos: pos, io }) {
     const at = Math.floor(pos / RECORD_SPAN);
     $('tape-head').textContent = `TAPE  record ${Math.min(at + 1, RECORDS)} of ${RECORDS}${io?.kind === 'rewind' ? '  rewinding' : ''}`;
     $('tape').replaceChildren(...Array.from({ length: 41 }, (_, i) => {
@@ -484,6 +516,12 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
     }));
   }
 
+  // The drum and tape as a machine state has them.
+  function renderDevices(s) {
+    if (has('drum')) renderDrum(s);
+    if (has('tape')) renderTape(s);
+  }
+
   // The RISC-V lines of the instruction executed last are highlighted, as its bytecode row is.
   function renderRiscv(activeIp) {
     let ip = null;
@@ -497,10 +535,10 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
   }
 
   function renderRegisters(s) {
-    if (has('index')) $('regs-head').textContent = `INDEX REGISTERS  saved ${saved} of ${runWithout - runWith} cycles so far (whole run: ${runWith} instruction cycles, ${runWithout} without them)`;
+    if (has('index')) $('regs-head').textContent = `INDEX REGISTERS  saved ${run.saved()} of ${runWithout - runWith} cycles so far (whole run: ${runWith} instruction cycles, ${runWithout} without them)`;
     const acc = has('accumulator') ? [el('div', { class: 'reg acc', text: `AC (${s.AC})` }), el('div', { class: 'reg acc', text: `MQ (${s.MQ})` })] : [];
     $('regs').replaceChildren(...acc, ...[0, 1, 2].map((r) => {
-      const holder = prog.regLoops.find((l) => l.reg === r && s.pc >= l.from && s.pc < l.to)?.name;
+      const holder = holderOf(prog.regLoops, r, s.pc);
       return el('div', { class: `reg${holder ? ' live' : ''}`, text: `${reg(r)}${holder ? ` = ${holder}` : ''} (${s.XR[r]})` });
     }));
   }
@@ -511,19 +549,14 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
 
   function render(focusIp = null) {
     if (!prog) {
-      if (has('drum')) renderDrum(demo().drum ?? drumLayout(1), 0, null);
-      if (has('tape')) renderTape(demo().tape ?? TAPE_DATA, 0, null);
+      const [DRUM, TAPE] = devices();
+      renderDevices({ DRUM, TAPE, cycles: 0, tapePos: 0, io: null });
       statusBox.textContent = 'not compiled';
       effectBox.textContent = '';
       renderPaper(outBox, []);
-      if (has('cards')) $('cards').replaceChildren();
-      if (has('riscv')) $('riscv').replaceChildren();
-      if ($('regs')) $('regs').replaceChildren();
+      for (const box of [ramBox, codeBox, arrowSvg, ...document.querySelectorAll('#cards, #riscv, #regs')]) box.replaceChildren();
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
-      ramBox.replaceChildren();
-      codeBox.replaceChildren();
-      arrowSvg.replaceChildren();
       return;
     }
     const s = machine.getState();
@@ -537,7 +570,7 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
 
     const clock = 'cycles' in s ? `cycle ${s.cycles} | waited ${s.waited}` : `steps ${s.steps}`;
     statusBox.textContent = view ? `compiling: ${building}/${prog.events.length}` : `pc ${s.pc ?? '-'} | next ${nextIp ?? '-'} | ${clock}${s.halted ? ' | HALTED' : ''}`;
-    effectBox.textContent = view ? '' : effect(prog, s) + (s.io || s.halted ? '' : savingNote(gainOf(code[s.ip])));
+    effectBox.textContent = view ? '' : effect(prog, s) + (s.io || s.halted ? '' : savingNote(gainOf(instruction(prog, s.MEM, s.ip))));
     renderPaper(outBox, s.stdout);
     if (has('cards')) {
       $('cards').replaceChildren(...s.cards.map((values) => card(values)), ...(s.io?.kind === 'punch' ? [card(s.io.values, s.io.done)] : []));
@@ -597,8 +630,7 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
       if (isNext || (nextIp === null && active)) row.scrollIntoView({ block: 'nearest' });
     });
 
-    if (has('drum')) renderDrum(s.DRUM, s.cycles, s.io);
-    if (has('tape')) renderTape(s.TAPE, s.tapePos, s.io);
+    renderDevices(s);
     if (has('riscv')) renderRiscv(activeIp);
     requestAnimationFrame(drawArrow);
   }
@@ -608,21 +640,21 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
     timer = null;
   }
 
-  const devices = () => [demo().drum ?? drumLayout(1), demo().tape ?? TAPE_DATA];
   const start = (p, ...rest) => (has('code') ? vm.createVM(p.initMem, ...devices(), ...rest) : vm.createVM(p.code, p.initMem));
 
   // The cycles a whole run spends on instructions (not waiting on devices) with this many index registers; run
   // without history, giving up on a long or endless program.
   function instructionCycles(registers) {
-    const bare = start(layout(srcBox.value, memSize, registers), false);
+    const bare = start(layout(srcBox.value, registers), false);
     for (let n = 0; n < 2e6 && !bare.getState().halted; n++) bare.step();
     const s = bare.getState();
     return s.halted ? s.cycles - s.waited : '?';
   }
 
   function load(walk) {
-    prog = layout(srcBox.value, memSize);
+    prog = layout(srcBox.value);
     machine = start(prog);
+    run = stepper(machine, (s) => (s.io ? 0 : gainOf(instruction(prog, s.MEM, s.ip))));
     if (has('riscv')) {
       try {
         riscv = emitRiscv(prog).split('\n');
@@ -632,8 +664,6 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
     }
     last = { reads: [], writes: [] };
     building = walk ? 0 : null;
-    batches.length = 0;
-    saved = 0;
     if (has('index')) {
       runWith = instructionCycles(3);
       runWithout = instructionCycles(0);
@@ -690,19 +720,8 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
       return true;
     }
     if (!prog) load(false);
-    const s = machine.getState();
-    if (s.halted) return false;
-    const gain = s.io ? 0 : gainOf(instruction(prog, s.MEM, s.ip));
-    const done = s.io?.done;
-    let n = 0;
-    let io;
-    do {
-      last = machine.step();
-      n++;
-      io = machine.getState().io;
-    } while (io && io.done === done && n < (io.kind === 'punch' ? ROW_CYCLES : SECTOR_WORDS * DRUM_WORD_CYCLES));
-    batches.push({ n, gain });
-    saved += gain;
+    if (machine.getState().halted) return false;
+    last = run.advance();
     return !last.halted;
   }
 
@@ -718,15 +737,13 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
     stop();
     if (building !== null) building = Math.max(0, building - 1);
     else if (machine) {
-      const { n, gain } = batches.pop() ?? { n: 1, gain: 0 };
-      for (let k = 0; k < n; k++) machine.stepBack();
-      saved -= gain;
+      run.back();
       last = { reads: [], writes: [] };
     }
     render();
   });
   $('run').addEventListener('click', () => {
-    if (machine && building === null && machine.getState().halted) machine.reset();
+    if (machine && building === null && machine.getState().halted) load(false);
     play(advance);
   });
   srcBox.addEventListener('scroll', () => { linesBox.scrollTop = srcBox.scrollTop; drawArrow(); });

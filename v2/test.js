@@ -2,18 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile } from './compiler.js';
 import { COST, DRUM_WORD_CYCLES, SECTORS, SECTOR_WORDS, createVM, decode, encode, headAt, ioWait } from './vm.js';
-import { DEMOS, MEM_SIZE, compileView, describe, drumLayout, effect, layout, haltLine, marks } from './visualizer.js';
+import { DEMOS, MEM_SIZE, compileView, describe, drumLayout, effect, haltLine, layout, marks } from './visualizer.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
 
 function run(source) {
-  const vm = createVM(layout(source, MEM_SIZE).initMem);
+  const vm = createVM(layout(source).initMem);
   while (!vm.getState().halted) vm.step();
   return vm;
 }
 
 test('v2 runs Demos 1-4 from memory, records ipMap, and supports stepBack/reset', () => {
-  const fact = layout(DEMOS.factorial.code, MEM_SIZE);
+  const fact = layout(DEMOS.factorial.code);
   assert.equal(fact.ipMap.length, fact.code.length);
   assert.equal(fact.ipMap[0], 1);
   assert.equal(fact.ipMap[fact.ipMap.length - 1], 6);
@@ -41,7 +41,7 @@ test('v2 runs Demos 1-4 from memory, records ipMap, and supports stepBack/reset'
 });
 
 test('v2 highlights the line executed last and points to the line executed next', () => {
-  const { initMem, ipMap } = layout(DEMOS.factorial.code, MEM_SIZE);
+  const { initMem, ipMap } = layout(DEMOS.factorial.code);
   const vm = createVM(initMem);
   assert.deepEqual(marks(ipMap, vm.getState()), { lastIp: null, nextIp: 0, lastLine: null, nextLine: 1 });
   vm.step();
@@ -59,7 +59,7 @@ test('v2 highlights the line executed last and points to the line executed next'
 });
 
 test('v2 says what the next instruction will do, in the names of its cells', () => {
-  const prog = layout(DEMOS.swap.code, MEM_SIZE);
+  const prog = layout(DEMOS.swap.code);
   const vm = createVM(prog.initMem);
   const seen = [];
   while (!vm.getState().halted) {
@@ -77,7 +77,7 @@ test('v2 says what the next instruction will do, in the names of its cells', () 
 test('v2 names every opcode on hover', () => {
   const seen = new Set();
   for (const demo of Object.values(DEMOS)) {
-    const prog = layout(demo.code, MEM_SIZE);
+    const prog = layout(demo.code);
     for (const instr of prog.code) {
       const text = describe(instr, prog.cells);
       assert.ok(text.startsWith(`${instr[0]} `) || text.startsWith(`${instr[0]}:`), text);
@@ -85,36 +85,36 @@ test('v2 names every opcode on hover', () => {
     }
   }
   for (const op of ['HALT', 'MOV', 'LOAD_IND', 'STORE_IND', 'PRINT', 'JMP', 'JAL', 'JMP_IND', 'JZ', '+', '<=']) assert.ok(seen.has(op), op);
-  const fact = layout(DEMOS.factorial.code, MEM_SIZE);
+  const fact = layout(DEMOS.factorial.code);
   assert.equal(describe(fact.code[4], fact.cells), 'JZ (jump if zero): if M[16] tmp_16 is 0, go to instruction 9; else go to the next one');
   assert.equal(describe(fact.code[3], fact.cells), '<=: M[16] tmp_16 = M[15] I <= M[11] N (1 if true, 0 if false)');
 });
 
 test('v2 maps each memory cell to the source lines that use it', () => {
   const lines = (prog, label) => [...prog.cellLines[prog.cells.findIndex((c) => c.label === label)]].sort((a, b) => a - b);
-  const fact = layout(DEMOS.factorial.code, MEM_SIZE);
+  const fact = layout(DEMOS.factorial.code);
   assert.deepEqual(lines(fact, 'N'), [1, 3]);
   assert.deepEqual(lines(fact, 'const(5)'), [1]);
   assert.deepEqual(lines(fact, 'FACT'), [2, 4, 6]);
   assert.deepEqual(lines(fact, 'I'), [3, 4]);
-  const swap = layout(DEMOS.swap.code, MEM_SIZE);
+  const swap = layout(DEMOS.swap.code);
   assert.deepEqual(lines(swap, 'SWAP.A'), [1, 2, 3, 8, 11]);
   assert.deepEqual(lines(swap, 'SWAP.ret'), [1, 8, 11]);
-  const saxpy = layout(DEMOS.saxpy.code, MEM_SIZE);
+  const saxpy = layout(DEMOS.saxpy.code);
   assert.deepEqual(lines(saxpy, 'A[4]'), [1, 10, 13, 14]);
-  const equiv = layout(DEMOS.equiv.code, MEM_SIZE);
+  const equiv = layout(DEMOS.equiv.code);
   assert.deepEqual(lines(equiv, 'WORKSPACE[3]'), [1, 2, 3, 4, 5, 6, 8]);
 });
 
 test('v2 replays compilation one memory cell or instruction at a time', () => {
   for (const demo of Object.values(DEMOS)) {
-    const prog = layout(demo.code, MEM_SIZE);
+    const prog = layout(demo.code);
     const done = compileView(prog, prog.events.length);
     assert.equal(done.cells, prog.usedCells);
     assert.deepEqual(done.code, prog.code);
     assert.deepEqual(compileView(prog, 0), { cells: 0, code: [], line: null, newCell: null, newIp: null });
   }
-  const fact = layout(DEMOS.factorial.code, MEM_SIZE);
+  const fact = layout(DEMOS.factorial.code);
   const first = compileView(fact, 1);
   assert.deepEqual([first.cells, first.newCell, first.line], [12, 11, 1]);
   const k = fact.events.findIndex((ev) => ev.kind === 'patch');
@@ -125,7 +125,7 @@ test('v2 replays compilation one memory cell or instruction at a time', () => {
 
 test('v2 stores the program in memory ahead of its data', () => {
   for (const demo of Object.values(DEMOS)) {
-    const prog = layout(demo.code, MEM_SIZE);
+    const prog = layout(demo.code);
     assert.deepEqual(prog.code.at(-1), ['HALT', 0, 0, 0]);
     prog.code.forEach((instr, ip) => {
       assert.deepEqual(decode(prog.initMem[ip]), instr);
@@ -134,13 +134,13 @@ test('v2 stores the program in memory ahead of its data', () => {
     assert.ok(prog.cells.slice(prog.codeLen, prog.usedCells).every((cell) => cell.role !== 'code' && cell.role !== 'unused'));
     assert.ok(prog.cells.slice(prog.usedCells).every((cell) => cell.role === 'unused'));
   }
-  assert.throws(() => layout(DEMOS.saxpy.code, 64), /Program does not fit in 64 cells of RAM/);
+  assert.throws(() => layout('DIM BIG(200)'), new RegExp(`Program does not fit in ${MEM_SIZE} cells of RAM`));
   assert.equal(decode(0)[0], 'HALT');
   assert.match(decode(31 << 27)[0], /^\?31$/);
 });
 
 test('v2 executes whatever is in memory, so overwriting code changes the program', () => {
-  const prog = layout('X = 1\nPRINT X', MEM_SIZE);
+  const prog = layout('X = 1\nPRINT X');
   const vm = createVM(prog.initMem);
   vm.getState().MEM[1] = prog.initMem[2];
   while (!vm.getState().halted) vm.step();
@@ -150,7 +150,7 @@ test('v2 executes whatever is in memory, so overwriting code changes the program
 });
 
 function runDemo(demo) {
-  const prog = layout(demo.code, MEM_SIZE);
+  const prog = layout(demo.code);
   const vm = createVM(prog.initMem, demo.drum);
   while (!vm.getState().halted) vm.step();
   return { prog, state: vm.getState() };
@@ -168,7 +168,7 @@ test('v2 streams a 128-word drum array through an 8-word buffer, with far fewer 
 });
 
 test('v2 DRUM_READ waits for its sector, copies a word every DRUM_WORD_CYCLES, and steps back mid-transfer', () => {
-  const prog = layout('DIM B(8)\nREAD DRUM 0, B\nPRINT B[7]', MEM_SIZE);
+  const prog = layout('DIM B(8)\nREAD DRUM 0, B\nPRINT B[7]');
   const vm = createVM(prog.initMem, drumLayout(1));
   const b = prog.sym.B.addr;
   const left = (n) => `waiting for drum sector 0: ${n} cycle${n === 1 ? '' : 's'} left`;
@@ -196,11 +196,11 @@ test('v2 DRUM_READ waits for its sector, copies a word every DRUM_WORD_CYCLES, a
   assert.equal(ioWait({ io: { kind: 'drum', sector: 3, done: 0 }, cycles: 130 }), 3 * SECTOR_WORDS * DRUM_WORD_CYCLES - 130);
   assert.equal(ioWait({ io: null, cycles: 5 }), 0);
   assert.deepEqual(headAt(4 * SECTOR_WORDS * DRUM_WORD_CYCLES + 2), { sector: 4, word: 0 });
-  assert.throws(() => { const bad = createVM(layout('DIM B(8)\nREAD DRUM 32, B', MEM_SIZE).initMem); bad.step(); }, /No drum sector 32/);
+  assert.throws(() => { const bad = createVM(layout('DIM B(8)\nREAD DRUM 32, B').initMem); bad.step(); }, /No drum sector 32/);
 });
 
 test('v2 explains drum reads and computes MOD', () => {
-  const prog = layout('DIM B(8)\nS = 3\nREAD DRUM S, B\nPRINT MOD(17, 5)', MEM_SIZE);
+  const prog = layout('DIM B(8)\nS = 3\nREAD DRUM S, B\nPRINT MOD(17, 5)');
   const vm = createVM(prog.initMem);
   vm.step();
   assert.equal(effect(prog, vm.getState()), `read drum sector S (3) -> B[0]..B[7], waiting ${3 * SECTOR_WORDS * DRUM_WORD_CYCLES - COST.MOV - COST.DRUM_READ} cycles first`);
@@ -216,16 +216,18 @@ test('v2 scopes SUB locals, indexes a 2D SUB argument, and rejects what does not
   assert.deepEqual(run('SUB S(K)\n  DO K = 1, 3\n  END\nEND\nOUT = 0\nCALL S(OUT)\nPRINT OUT').getState().stdout, [4]);
   for (const [bad, message] of [
     ['X = 3.14', /Expected identifier, got '\.'/],
+    ['DIM A(0)', /Expected an array size, got '0'/],
+    ['DIM A(N)', /Expected an array size, got 'N'/],
     ['X = 1\nEND\nPRINT X', /Expected 'end of input', got 'END'/],
     ['X = 1\nELSE\nX = 2', /Expected 'end of input', got 'ELSE'/],
     ['DIM A(2', /Unexpected end of input/],
     ['CALL NOPE()', /Cannot read properties of undefined/],
     ['X = 1\nY = X[0, 0]', /Cannot read properties of null/],
-  ]) assert.throws(() => layout(bad, MEM_SIZE), message);
+  ]) assert.throws(() => layout(bad), message);
 });
 
 test('v2 undoes a step that faults, so stepping again faults again', () => {
-  const vm = ((src) => createVM(layout(src, MEM_SIZE).initMem))('X = 0\nY = 5 / X\nPRINT 7');
+  const vm = ((src) => createVM(layout(src).initMem))('X = 0\nY = 5 / X\nPRINT 7');
   vm.step();
   const at = [vm.getState().ip, vm.getState().steps];
   assert.throws(() => vm.step(), /Division by zero/);
@@ -233,11 +235,11 @@ test('v2 undoes a step that faults, so stepping again faults again', () => {
   assert.throws(() => vm.step(), /Division by zero/);
   assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
   assert.throws(() => createVM([encode(['JMP_IND', 1, 0, 0]), -1]).step(), /Memory address out of bounds: -1/);
-  assert.equal(effect(layout('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
+  assert.equal(effect(layout('X = 1'), createVM([31 << 27]).getState()), 'unknown opcode ?31');
 });
 
 test('v2 reads the drum into a SUB array argument, and stops at the end of RAM', () => {
-  const prog = layout('DIM BIG(16)\nSUB LOAD(S, DST)\n  DIM DST(8)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]', MEM_SIZE);
+  const prog = layout('DIM BIG(16)\nSUB LOAD(S, DST)\n  DIM DST(8)\n  READ DRUM S, DST\nEND\nCALL LOAD(1, BIG)\nPRINT BIG[0]\nPRINT BIG[7]');
   const vm = createVM(prog.initMem, drumLayout(1));
   while (!vm.getState().halted) vm.step();
   assert.deepEqual(vm.getState().stdout, [9, 16]);
@@ -256,7 +258,7 @@ test('v2 points past the last line once the program halts', () => {
 
 test('v2 reads as many drum words as the array holds, on through the next sector', () => {
   const read = (src) => {
-    const vm = createVM(layout(src, MEM_SIZE).initMem, drumLayout(1));
+    const vm = createVM(layout(src).initMem, drumLayout(1));
     while (!vm.getState().halted) vm.step();
     return vm.getState().stdout;
   };

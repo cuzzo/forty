@@ -66,7 +66,7 @@ There are no compare instructions. A condition subtracts and branches on the AC'
 | `X > Y` | Y - X | `TPL` |
 | `X <= Y` | Y - X | `TMI` |
 
-So a comparison only makes sense in an `IF`. `X = A < B` is now a compile error.
+So a comparison only makes sense in an `IF`, with or without parentheses. `X = A < B` is now a compile error.
 
 A `DO` loop counted in memory tests `stop - I` with `TMI`. One counted in an index
 register uses `TXH` as before.
@@ -93,8 +93,14 @@ So C belongs to linkage, and `DO` loops get A and B.
 
 v0 to v5 packed three 9-bit operands into one word, which no real machine of the time did.
 A 704 instruction had one 15-bit address, a 15-bit decrement and a 3-bit tag. v6 does
-the same, at a smaller size: a 5-bit opcode, an address and a decrement (each a 2-bit tag
-and 8 bits), and a 2-bit register.
+the same, at a smaller size: a 5-bit opcode, a 10-bit address (a 2-bit tag and 8 bits), an
+8-bit decrement, and a 9-bit field for an index register or a `READ`'s word count.
+
+As on the 704, only the address can be indexed. An index instruction's tag already picks
+its register, and the decrement is a plain number. So when a `DO` loop's start or bound,
+or a drum sector, is an array element read through a register (`DO J = 1, A[I]`), v6
+first copies it to a plain cell with `CLA` and `STO`. That also reads the bound once, as
+FORTRAN did.
 
 One address per instruction makes programs longer:
 

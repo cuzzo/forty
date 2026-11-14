@@ -1,23 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CARD_ROWS, COST, DRUM_WORD_CYCLES, GAP, RECORD_SPAN, REWIND_SPEED, ROW_CYCLES, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, createVM, decode, encode, headAt, ioWait, tagOf } from './vm.js';
-import { DEMOS, MEM_SIZE, PUNCH_ORDER, TAPE_DATA, cardPunches, compileView, describe, drumLayout, effect, layout, haltLine, marks, saving } from './visualizer.js';
+import { DEMOS, MEM_SIZE, PUNCH_ORDER, TAPE_DATA, cardPunches, compileView, describe, drumLayout, effect, haltLine, holderOf, layout, marks, saving, stepper } from './visualizer.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
 // v0-v3's memory-counter code, for the tests that pin it.
-const bare = (source) => layout(source, MEM_SIZE, 0);
+const bare = (source) => layout(source, 0);
 const ops = (prog) => prog.code.map(([op]) => op);
 
 // Runs a program to the end; without history unless a test steps back.
 function run(source, { registers = 3, drum = [], tape = [], record = false } = {}) {
-  const prog = layout(source, MEM_SIZE, registers);
+  const prog = layout(source, registers);
   const vm = createVM(prog.initMem, drum, tape, record);
   while (!vm.getState().halted) vm.step();
   return { prog, vm, state: vm.getState() };
 }
 
 test('v5 runs the demos from memory, records ipMap, and supports stepBack/reset', () => {
-  const fact = layout(DEMOS.factorial.code, MEM_SIZE);
+  const fact = layout(DEMOS.factorial.code);
   assert.equal(fact.ipMap.length, fact.code.length);
   assert.deepEqual([fact.ipMap[0], fact.ipMap.at(-1)], [1, 6]);
   assert.deepEqual(run(DEMOS.factorial.code).state.stdout, [120]);
@@ -51,7 +51,7 @@ test('v5 index registers change no demo\'s output and cut the instruction cycles
 
 test('v5 keeps a DO counter in an index register and indexes an array with it', () => {
   const src = 'DIM A(4)\nDO I = 0, 3\n  A[I] = I * 2\nEND\nPRINT A[3]';
-  const prog = layout(src, MEM_SIZE);
+  const prog = layout(src);
   assert.deepEqual(ops(prog).slice(0, 6), ['LXD', 'TXH', 'PXD', '*', 'MOV', 'TXI']);
   assert.deepEqual([tagOf(prog.code[4][1]), prog.code[4][1] & 127], [1, prog.sym.A.addr]);
   assert.deepEqual(prog.regLoops, [{ reg: 0, name: 'I', from: 0, to: 6 }]);
@@ -61,11 +61,11 @@ test('v5 keeps a DO counter in an index register and indexes an array with it', 
 
 test('v5 gives a loop a register only while one is free, for a local variable, outside a SUB', () => {
   const nested = 'DO P = 1, 1\n  DO Q = 1, 1\n    DO R = 1, 1\n      DO S = 1, 1\n        PRINT S\n      END\n    END\n  END\nEND';
-  assert.deepEqual(layout(nested, MEM_SIZE).regLoops.map((l) => [l.name, l.reg]), [['R', 2], ['Q', 1], ['P', 0]]);
+  assert.deepEqual(layout(nested).regLoops.map((l) => [l.name, l.reg]), [['R', 2], ['Q', 1], ['P', 0]]);
   assert.deepEqual(run(nested).state.stdout, [1]);
-  assert.deepEqual(layout('SUB T(N)\n  DO I = 1, N\n    PRINT I\n  END\nEND\nCALL T(2)', MEM_SIZE).regLoops, []);
+  assert.deepEqual(layout('SUB T(N)\n  DO I = 1, N\n    PRINT I\n  END\nEND\nCALL T(2)').regLoops, []);
   assert.deepEqual(run('SUB T(K)\n  DO K = 1, 3\n  END\nEND\nOUT = 0\nCALL T(OUT)\nPRINT OUT').state.stdout, [4]);
-  assert.deepEqual(layout('DO I = 1, 2\nEND\nDO J = 1, 2\nEND', MEM_SIZE).regLoops.map((l) => l.reg), [0, 0]);
+  assert.deepEqual(layout('DO I = 1, 2\nEND\nDO J = 1, 2\nEND').regLoops.map((l) => l.reg), [0, 0]);
 });
 
 test('v5 passes a register-indexed element by reference, and a register counter by value', () => {
@@ -81,7 +81,7 @@ test('v5 charges each instruction its IBM 704 cycles', () => {
 });
 
 test('v5 PUNCH makes up 10-column fields, 7 to a card, and punches each card in 12 rows', () => {
-  const prog = layout('N = 0 - 9\nPUNCH 1, 2, 3, 4, 5, 6, 7, 8, N', MEM_SIZE);
+  const prog = layout('N = 0 - 9\nPUNCH 1, 2, 3, 4, 5, 6, 7, 8, N');
   assert.deepEqual(ops(prog).filter((op) => op === 'CARD' || op === 'PUNCH').join(' '), 'CARD CARD CARD CARD CARD CARD CARD PUNCH CARD CARD PUNCH');
   const vm = createVM(prog.initMem);
   while (!vm.getState().pending.length) vm.step();
@@ -100,7 +100,7 @@ test('v5 PUNCH makes up 10-column fields, 7 to a card, and punches each card in 
 });
 
 test('v5 Back restores the index registers, the card being made up and the punched cards', () => {
-  const prog = layout('DO I = 1, 2\n  PUNCH I\nEND', MEM_SIZE);
+  const prog = layout('DO I = 1, 2\n  PUNCH I\nEND');
   const vm = createVM(prog.initMem);
   vm.step();
   assert.equal(vm.getState().XR[0], 1);
@@ -115,7 +115,7 @@ test('v5 Back restores the index registers, the card being made up and the punch
 });
 
 test('v5 explains the index register instructions and indexed operands', () => {
-  const prog = layout('DIM A(4)\nDO I = 0, 3\n  A[I] = I * 2\nEND', MEM_SIZE);
+  const prog = layout('DIM A(4)\nDO I = 0, 3\n  A[I] = I * 2\nEND');
   const vm = createVM(prog.initMem);
   const next = () => effect(prog, vm.getState());
   assert.equal(next(), 'const(0) (0) -> index register A');
@@ -139,7 +139,7 @@ test('v5 explains the index register instructions and indexed operands', () => {
 });
 
 test('v5 DRUM_READ waits for its sector, then copies a word every DRUM_WORD_CYCLES', () => {
-  const prog = layout('DIM B(8)\nREAD DRUM 0, B\nPRINT B[7]', MEM_SIZE);
+  const prog = layout('DIM B(8)\nREAD DRUM 0, B\nPRINT B[7]');
   const vm = createVM(prog.initMem, drumLayout(1));
   const said = effect(prog, vm.getState());
   vm.step();
@@ -167,7 +167,7 @@ test('v5 reads the tape at the IBM 727\'s speed and rewinds at that same speed',
 });
 
 test('v5 highlights the line executed last and points to the line executed next', () => {
-  const { initMem, ipMap } = layout(DEMOS.factorial.code, MEM_SIZE);
+  const { initMem, ipMap } = layout(DEMOS.factorial.code);
   const vm = createVM(initMem);
   assert.deepEqual(marks(ipMap, vm.getState()), { lastIp: null, nextIp: 0, lastLine: null, nextLine: 1 });
   while (!vm.getState().halted) {
@@ -179,7 +179,7 @@ test('v5 highlights the line executed last and points to the line executed next'
 });
 
 test('v5 says what each instruction will do, and names every opcode on hover', () => {
-  const prog = layout(DEMOS.swap.code, MEM_SIZE);
+  const prog = layout(DEMOS.swap.code);
   const vm = createVM(prog.initMem);
   const seen = [];
   while (!vm.getState().halted) {
@@ -191,7 +191,7 @@ test('v5 says what each instruction will do, and names every opcode on hover', (
   assert.ok(['call ', 'return to ', 'print '].every((start) => seen.some((line) => line.startsWith(start))));
   const names = new Set();
   for (const demo of Object.values(DEMOS)) {
-    const p = layout(demo.code, MEM_SIZE);
+    const p = layout(demo.code);
     for (const instr of p.code) {
       assert.match(describe(instr, p.cells), new RegExp(`^${instr[0].replace(/[*+]/g, '\\$&')}[ :]`));
       names.add(instr[0]);
@@ -207,7 +207,7 @@ test('v5 maps cells to source lines and replays compilation, as v1-v3 do without
   assert.deepEqual(lines(bare(DEMOS.swap.code), 'SWAP.A'), [1, 2, 3, 8, 11]);
   assert.deepEqual(lines(bare(DEMOS.equiv.code), 'WORKSPACE[3]'), [1, 2, 3, 4, 5, 6, 8]);
   for (const demo of Object.values(DEMOS)) {
-    const prog = layout(demo.code, MEM_SIZE);
+    const prog = layout(demo.code);
     const done = compileView(prog, prog.events.length);
     assert.deepEqual([done.cells, done.code], [prog.usedCells, prog.code]);
     assert.deepEqual(prog.code.at(-1), ['HALT', 0, 0, 0]);
@@ -216,7 +216,7 @@ test('v5 maps cells to source lines and replays compilation, as v1-v3 do without
   const k = fact.events.findIndex((ev) => ev.kind === 'patch');
   assert.deepEqual([compileView(fact, k).code[4], compileView(fact, k + 1).code[4]], [['JZ', 0, 16, 0], ['JZ', 9, 16, 0]]);
   assert.equal(describe(fact.code[4], fact.cells), 'JZ (jump if zero): if M[16] tmp_16 is 0, go to instruction 9; else go to the next one');
-  assert.throws(() => layout(DEMOS.saxpy.code, 64), /Program does not fit in 64 cells of RAM/);
+  assert.throws(() => layout('DIM BIG(200)'), new RegExp(`Program does not fit in ${MEM_SIZE} cells of RAM`));
 });
 
 test('v5 scopes SUB locals, reads devices into SUB arrays, and rejects what does not parse or run', () => {
@@ -226,22 +226,24 @@ test('v5 scopes SUB locals, reads devices into SUB arrays, and rejects what does
   assert.deepEqual(run('DIM BIG(8)\nSUB PULL(DST)\n  DIM DST(8)\n  READ TAPE DST\nEND\nCALL PULL(BIG)\nPRINT BIG[7]', { tape: TAPE_DATA }).state.stdout, [8]);
   for (const [bad, message] of [
     ['X = 3.14', /Expected identifier, got '\.'/],
+    ['DIM A(0)', /Expected an array size, got '0'/],
+    ['DIM A(N)', /Expected an array size, got 'N'/],
     ['X = 1\nEND\nPRINT X', /Expected 'end of input', got 'END'/],
     ['DIM R(8)\nREAD DISK R', /Expected DRUM or TAPE, got 'DISK'/],
-  ]) assert.throws(() => layout(bad, MEM_SIZE), message);
-  const vm = createVM(layout('X = 0\nY = 5 / X\nPRINT 7', MEM_SIZE).initMem);
+  ]) assert.throws(() => layout(bad), message);
+  const vm = createVM(layout('X = 0\nY = 5 / X\nPRINT 7').initMem);
   vm.step();
   const at = [vm.getState().ip, vm.getState().steps];
   assert.throws(() => vm.step(), /Division by zero/);
   assert.deepEqual([vm.getState().ip, vm.getState().steps], at);
   assert.throws(() => run('DIM A(2)\nA[200] = 1'), /Memory address out of bounds/);
-  assert.equal(effect(layout('X = 1', MEM_SIZE), createVM([31 << 27]).getState()), 'unknown opcode ?31');
+  assert.equal(effect(layout('X = 1'), createVM([31 << 27]).getState()), 'unknown opcode ?31');
   assert.equal(decode(encode(['MOV', 5 | (2 << 7), 6, 0]))[1] >> 7, 2);
 });
 
 test('v5 credits each instruction\'s saving as it runs, adding up to the whole-run difference', () => {
   const live = (source, demo) => {
-    const prog = layout(source, MEM_SIZE);
+    const prog = layout(source);
     const vm = createVM(prog.initMem, demo.drum, demo.tape, false);
     let total = 0;
     while (!vm.getState().halted) {
@@ -256,7 +258,10 @@ test('v5 credits each instruction\'s saving as it runs, adding up to the whole-r
     return state.cycles - state.waited;
   };
   const heavy = { code: 'DO I = 1, 6\n  PUNCH I, I * I, I * I * I\nEND' };
-  for (const demo of [...Object.values(DEMOS), heavy]) assert.equal(live(demo.code, demo), cpu(demo.code, 0, demo) - cpu(demo.code, 3, demo), demo.name);
+  // A bound indexed by an outer loop's register is read once, as it is without registers; so is an element copied onto itself.
+  const bound = { code: 'DIM A(3)\nA[0] = 2\nA[1] = 3\nA[2] = 1\nS = 0\nDO I = 0, 2\n  DO J = 1, A[I]\n    S = S + J\n  END\nEND\nPRINT S' };
+  const self = { code: 'DIM A(3)\nDO I = 0, 2\n  A[I] = A[I]\nEND\nPRINT A[0]' };
+  for (const demo of [...Object.values(DEMOS), heavy, bound, self]) assert.equal(live(demo.code, demo), cpu(demo.code, 0, demo) - cpu(demo.code, 3, demo), demo.name);
   assert.deepEqual(['TXH', 'TXI', 'LXD', 'PXD'].map((op) => saving([op, 0, 0, 0])), [10, 6, 2, -4]);
   assert.deepEqual([saving(['MOV', 5 | (1 << 7), 6, 0]), saving(['+', 7, 5 | (1 << 7), 6]), saving(['MOV', 5, 6, 0])], [8, 12, 0]);
   assert.equal(live(heavy.code, heavy), -36);
@@ -270,7 +275,7 @@ test('v5 points past the last line once the program halts', () => {
 
 test('v5 reads as many drum words as the array holds, on through the next sector', () => {
   const read = (src) => {
-    const vm = createVM(layout(src, MEM_SIZE).initMem, drumLayout(1), TAPE_DATA);
+    const vm = createVM(layout(src).initMem, drumLayout(1), TAPE_DATA);
     while (!vm.getState().halted) vm.step();
     return vm.getState().stdout;
   };
@@ -279,9 +284,41 @@ test('v5 reads as many drum words as the array holds, on through the next sector
 });
 
 test('v5 reads one tape record per READ, as many words as the array holds, and stops on a longer list', () => {
-  const vm = createVM(layout('DIM R(3)\nX = 99\nREAD TAPE R\nREAD TAPE R\nPRINT R[0]\nPRINT X', MEM_SIZE).initMem, [], TAPE_DATA);
+  const vm = createVM(layout('DIM R(3)\nX = 99\nREAD TAPE R\nREAD TAPE R\nPRINT R[0]\nPRINT X').initMem, [], TAPE_DATA);
   while (!vm.getState().halted) vm.step();
   assert.deepEqual([vm.getState().stdout, vm.getState().waited], [[9, 99], 2 * RECORD_SPAN]);
-  const long = createVM(layout('DIM R(16)\nREAD TAPE R', MEM_SIZE).initMem, [], TAPE_DATA);
+  const long = createVM(layout('DIM R(16)\nREAD TAPE R').initMem, [], TAPE_DATA);
   assert.throws(() => long.step(), /Read-Write Check: a list of 16 words is longer than the 8-word record/);
+});
+
+test('v5 Next and Previous: back() undoes one advance, even one a fault cut short, and saved sums the advances', () => {
+  const prog = layout(DEMOS.factorial.code);
+  const vm = createVM(prog.initMem);
+  const nav = stepper(vm, (s) => (s.io ? 0 : saving(decode(s.MEM[s.ip]))));
+  while (!vm.getState().halted) nav.advance();
+  const cpu = (registers) => { const { state } = run(DEMOS.factorial.code, { registers }); return state.cycles; };
+  assert.equal(nav.saved(), cpu(0) - cpu(3));
+  while (vm.getState().steps) nav.back();
+  assert.deepEqual([nav.saved(), vm.getState().ip], [0, 0]);
+  // A drum read into the last cells of memory faults on its fourth word, partway through an advance.
+  const mem = new Int32Array(MEM_SIZE);
+  mem.set([encode(['DRUM_READ', 1, 2, 8]), MEM_SIZE - 3, 1]);
+  const edge = createVM(mem, drumLayout(1));
+  const steps = stepper(edge, () => 0);
+  let before;
+  assert.throws(() => { for (;;) { before = edge.getState().steps; steps.advance(); } }, new RegExp(`Memory address out of bounds: ${MEM_SIZE}`));
+  assert.ok(edge.getState().steps > before);
+  steps.back();
+  assert.equal(edge.getState().steps, before);
+});
+
+test('v5 shows a register holding its DO variable only once the loop has started', () => {
+  const { regLoops } = layout(DEMOS.squares.code);
+  assert.equal(regLoops[0].from, 0);
+  assert.deepEqual([holderOf(regLoops, 0, null), holderOf(regLoops, 0, 0), holderOf(regLoops, 1, 0)], [undefined, 'I', undefined]);
+});
+
+test('v5 memory is the 128 words an operand can name, so a bigger program is refused, not wrapped onto the code', () => {
+  assert.equal(MEM_SIZE, 128);
+  assert.throws(() => layout('DIM A(80)\nDIM B(40)\nA[0] = 42\nB[39] = 99\nPRINT A[0]\nPRINT B[39]'), /Program does not fit in 128 cells of RAM/);
 });

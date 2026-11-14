@@ -14,15 +14,15 @@ export const tagOf = (operand) => operand >> 8;
 export const addrOf = (operand) => operand & 255;
 export const tagged = (addr, reg) => addr | ((reg + 1) << 8);
 
-// One address per instruction, as the 704's words had: 5-bit opcode, a 10-bit address and a 10-bit decrement (each
-// a tag and 8 bits), and a 7-bit field for an index register or a READ's word count.
-export const encode = ([op, a, b, c]) => {
-  if (c > 127) throw new RangeError(`${c} does not fit in an instruction's 7-bit count`);
-  return (OPS.indexOf(op) << 27) | (a << 17) | (b << 7) | c;
-};
-export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 17) & 1023, (word >>> 7) & 1023, word & 127];
+// One address per instruction, as the 704's words had: a 5-bit opcode, a 10-bit address (a tag and 8 bits), an 8-bit
+// decrement with no tag, as the 704's had none, and a 9-bit field for an index register or a READ's word count.
+export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 17) | (b << 9) | c;
+export const decode = (word) => [OPS[word >>> 27] ?? `?${word >>> 27}`, (word >>> 17) & 1023, (word >>> 9) & 255, word & 511];
 
 // record = false runs without the history Back needs, for measuring a program to the end.
+// Memory: 256 words, all an address's 8 bits can name. One-address code takes about twice v5's instructions.
+export const MEM_WORDS = 256;
+
 export function createVM(initMem, drum = [], tape = [], record = true) {
   const MEM = new Int32Array(initMem);
   const XR = new Int32Array(3);

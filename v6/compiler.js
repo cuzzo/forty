@@ -1,6 +1,7 @@
-import { encode, tagged } from './vm.js';
+import { MEM_WORDS, encode, tagged } from './vm.js';
 
-const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
+// An array's dims are [rows, columns]; a 1D array has one column.
+const span = (dims) => (dims ? dims[0] * dims[1] : 1);
 
 // The last token of every program; it has a space, so no source text can be it.
 const END = 'end of input';
@@ -30,14 +31,14 @@ const viaLink = (addr) => tagged(addr, LINK);
 const FALSE_JUMP = { '==': [false, 'TNZ'], '!=': [false, 'TZE'], '<': [false, 'TPL'], '>=': [false, 'TMI'], '>': [true, 'TPL'], '<=': [true, 'TMI'] };
 
 // registers: how many of the index registers A, B the compiler may give DO loops (0 compiles without them).
-export function compile(source, memSize = 256, registers = 2) {
-  return build(source, memSize, build(source, memSize, 0, registers).codeLen, registers);
+export function compile(source, registers = 2) {
+  return build(source, build(source, 0, registers).codeLen, registers);
 }
 
-function build(source, memSize, dataBase, registers) {
+function build(source, dataBase, registers) {
   const tokens = tokenize(source);
-  const initMem = new Int32Array(memSize);
-  const refs = Array.from({ length: memSize }, () => new Set());
+  const initMem = new Int32Array(MEM_WORDS);
+  const refs = Array.from({ length: MEM_WORDS }, () => new Set());
   const consts = new Map();
   const subs = Object.create(null);
   const code = [];
@@ -57,7 +58,7 @@ function build(source, memSize, dataBase, registers) {
   }
 
   function alloc(size = 1, role = 'scratch', label = '') {
-    if (nextMem + size > memSize) throw new Error(`Program does not fit in ${memSize} cells of RAM`);
+    if (nextMem + size > MEM_WORDS) throw new Error(`Program does not fit in ${MEM_WORDS} cells of RAM`);
     const base = nextMem;
     nextMem += size;
     touch(base, size);
@@ -124,6 +125,7 @@ function build(source, memSize, dataBase, registers) {
   // Put a place's value in the AC.
   function load(p) {
     if (p.mode === 'AC') return;
+    if (p.mode === 'CMP') throw new SyntaxError(`'${p.op}' is allowed only in an IF test`);
     spill();
     if (p.mode === 'REG') emit('PXD', 0, 0, p.reg);
     else if (p.mode === 'IND') {
@@ -142,6 +144,14 @@ function build(source, memSize, dataBase, registers) {
     const tmp = alloc(1);
     emit('STO', tmp);
     return tmp;
+  }
+
+  // An address with no index tag that holds the place's value. The 704 indexed only an instruction's address field, so
+  // an index instruction's operand (picked by its tag) and its decrement (a plain number) can't carry another tag.
+  function cell(p) {
+    if (p.mode !== 'IDX') return valAddr(p);
+    load(p);
+    return valAddr(inAC());
   }
 
   // A cell holding the place's address, to pass it by reference. A value that is not in memory is passed in a temporary.
@@ -165,9 +175,10 @@ function build(source, memSize, dataBase, registers) {
   }
 
   // l op r through the AC, or through the MQ for * / and MOD: LDQ l, then MPY r (the product in the MQ), or a
-  // cleared AC and DVP r (the quotient in the MQ, the remainder in the AC).
+  // cleared AC and DVP r (the quotient in the MQ, the remainder in the AC). The 704 had no compare that leaves a
+  // value, so a comparison stays unevaluated until an IF tests it.
   function arith(op, l, r) {
-    if (!['+', '-', '*', '/', '%'].includes(op)) throw new SyntaxError(`'${op}' is allowed only in an IF or loop test`);
+    if (op in FALSE_JUMP) return { mode: 'CMP', op, l, r };
     const b = valAddr(r);
     if (op === '+' || op === '-') {
       load(l);
@@ -188,28 +199,35 @@ function build(source, memSize, dataBase, registers) {
     return dir(tmp);
   }
 
-  // Leave the AC holding the difference a comparison tests, and emit the transfer taken when it is false.
+  // Leave the AC holding what an IF tests (a comparison's difference, or any other value, false when 0), and emit the
+  // transfer taken when the test is false.
   function condition() {
-    const l = parseExpr(2);
-    if (!(peek() in FALSE_JUMP)) {
-      load(l);
+    const test = parseExpr();
+    if (test.mode !== 'CMP') {
+      load(test);
       acHolds = null;
       return emit('TZE');
     }
-    const [swap, jump] = FALSE_JUMP[eat()];
-    const r = parseExpr(2);
-    if (swap) arith('-', r, l);
-    else arith('-', l, r);
+    const [swap, jump] = FALSE_JUMP[test.op];
+    if (swap) arith('-', test.r, test.l);
+    else arith('-', test.l, test.r);
     acHolds = null;
     return emit(jump);
+  }
+
+  // An array dimension: a whole number, at least 1.
+  function size() {
+    const tok = eat();
+    if (Number(tok) >= 1) return Number(tok);
+    throw new SyntaxError(`Expected an array size, got '${tok}'`);
   }
 
   function parseDecl() {
     const name = eat();
     if (peek() !== '(') return { name, dims: null };
     eat('(');
-    const dims = [Number(eat())];
-    if (peek() === ',') { eat(','); dims.push(Number(eat())); }
+    const dims = [size(), 1];
+    if (peek() === ',') { eat(','); dims[1] = size(); }
     eat(')');
     return { name, dims };
   }
@@ -282,7 +300,7 @@ function build(source, memSize, dataBase, registers) {
     if (device !== 'DRUM' && device !== 'TAPE') throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
     let sector = 0;
     if (device === 'DRUM') {
-      sector = valAddr(parseExpr());
+      sector = cell(parseExpr());
       eat(',');
     }
     // FORTRAN reads as many words as the list names: here the whole array.
@@ -332,13 +350,13 @@ function build(source, memSize, dataBase, registers) {
     eat('=');
     const start = parseExpr();
     eat(',');
-    const stop = dir(valAddr(parseExpr()));
+    const stop = cell(parseExpr());
     const reg = v === sym[name] && v.mode === 'DIR' && !v.dims ? freeRegs.pop() : undefined;
     if (reg !== undefined) {
       sym[name] = { mode: 'REG', reg, addr: v.addr, dims: null };
-      emit('LXD', valAddr(start), 0, reg);
+      emit('LXD', cell(start), 0, reg);
       const top = code.length;
-      const exit = emit('TXH', 0, stop.addr, reg);
+      const exit = emit('TXH', 0, stop, reg);
       parseBlock();
       eat('END');
       emit('TXI', top, 1, reg);
@@ -351,7 +369,7 @@ function build(source, memSize, dataBase, registers) {
     load(start);
     store(v);
     const top = code.length;
-    arith('-', stop, v);
+    arith('-', dir(stop), v);
     acHolds = null;
     const exit = emit('TMI');
     parseBlock();

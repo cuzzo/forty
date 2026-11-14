@@ -1,4 +1,6 @@
-const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
+import { MEM_WORDS } from './vm.js';
+// An array's dims are [rows, columns]; a 1D array has one column.
+const span = (dims) => (dims ? dims[0] * dims[1] : 1);
 
 // The last token of every program; it has a space, so no source text can be it.
 const END = 'end of input';
@@ -17,10 +19,10 @@ export function tokenize(source) {
   return tokens;
 }
 
-export function compile(source, memSize = 256) {
+export function compile(source) {
   const tokens = tokenize(source);
-  const initMem = new Int32Array(memSize);
-  const refs = Array.from({ length: memSize }, () => new Set());
+  const initMem = new Int32Array(MEM_WORDS);
+  const refs = Array.from({ length: MEM_WORDS }, () => new Set());
   const consts = new Map();
   const subs = Object.create(null);
   const code = [];
@@ -36,7 +38,7 @@ export function compile(source, memSize = 256) {
   }
 
   function alloc(size = 1, role = 'scratch', label = '') {
-    if (nextMem + size > memSize) throw new Error(`RAM overflow (${memSize} cells)`);
+    if (nextMem + size > MEM_WORDS) throw new Error(`RAM overflow (${MEM_WORDS} cells)`);
     const base = nextMem;
     nextMem += size;
     touch(base, size);
@@ -100,12 +102,19 @@ export function compile(source, memSize = 256) {
     else if (src !== place.addr) emit('MOV', place.addr, src, 0);
   }
 
+  // An array dimension: a whole number, at least 1.
+  function size() {
+    const tok = eat();
+    if (Number(tok) >= 1) return Number(tok);
+    throw new SyntaxError(`Expected an array size, got '${tok}'`);
+  }
+
   function parseDecl() {
     const name = eat();
     if (peek() !== '(') return { name, dims: null };
     eat('(');
-    const dims = [Number(eat())];
-    if (peek() === ',') { eat(','); dims.push(Number(eat())); }
+    const dims = [size(), 1];
+    if (peek() === ',') { eat(','); dims[1] = size(); }
     eat(')');
     return { name, dims };
   }

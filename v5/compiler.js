@@ -1,6 +1,7 @@
-import { encode } from './vm.js';
+import { MEM_WORDS, encode } from './vm.js';
 
-const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
+// An array's dims are [rows, columns]; a 1D array has one column.
+const span = (dims) => (dims ? dims[0] * dims[1] : 1);
 
 // The last token of every program; it has a space, so no source text can be it.
 const END = 'end of input';
@@ -24,14 +25,14 @@ export function tokenize(source) {
 const CARD_FIELDS = 7;
 
 // registers: how many of the index registers A, B, C the compiler may give DO loops (0 compiles without them).
-export function compile(source, memSize = 256, registers = 3) {
-  return build(source, memSize, build(source, memSize, 0, registers).codeLen, registers);
+export function compile(source, registers = 3) {
+  return build(source, build(source, 0, registers).codeLen, registers);
 }
 
-function build(source, memSize, dataBase, registers) {
+function build(source, dataBase, registers) {
   const tokens = tokenize(source);
-  const initMem = new Int32Array(memSize);
-  const refs = Array.from({ length: memSize }, () => new Set());
+  const initMem = new Int32Array(MEM_WORDS);
+  const refs = Array.from({ length: MEM_WORDS }, () => new Set());
   const consts = new Map();
   const subs = Object.create(null);
   const code = [];
@@ -49,7 +50,7 @@ function build(source, memSize, dataBase, registers) {
   }
 
   function alloc(size = 1, role = 'scratch', label = '') {
-    if (nextMem + size > memSize) throw new Error(`Program does not fit in ${memSize} cells of RAM`);
+    if (nextMem + size > MEM_WORDS) throw new Error(`Program does not fit in ${MEM_WORDS} cells of RAM`);
     const base = nextMem;
     nextMem += size;
     touch(base, size);
@@ -121,15 +122,23 @@ function build(source, memSize, dataBase, registers) {
   function store(place, src) {
     if (place.mode === 'IND') emit('STORE_IND', place.addr, src, 0);
     else if (place.mode === 'REG') emit('LXD', place.reg, src, 0);
-    else if (src !== valAddr(place)) emit('MOV', valAddr(place), src, 0);
+    // No MOV copies a cell onto itself, as a DO loop's increment would; an indexed element has no addr, so it is copied.
+    else if (src !== place.addr) emit('MOV', valAddr(place), src, 0);
+  }
+
+  // An array dimension: a whole number, at least 1.
+  function size() {
+    const tok = eat();
+    if (Number(tok) >= 1) return Number(tok);
+    throw new SyntaxError(`Expected an array size, got '${tok}'`);
   }
 
   function parseDecl() {
     const name = eat();
     if (peek() !== '(') return { name, dims: null };
     eat('(');
-    const dims = [Number(eat())];
-    if (peek() === ',') { eat(','); dims.push(Number(eat())); }
+    const dims = [size(), 1];
+    if (peek() === ',') { eat(','); dims[1] = size(); }
     eat(')');
     return { name, dims };
   }
@@ -264,7 +273,9 @@ function build(source, memSize, dataBase, registers) {
     eat('=');
     const start = valAddr(parseExpr());
     eat(',');
-    const stop = valAddr(parseExpr());
+    // The 704 read a DO's bound once, into its TXH; an indexed operand would read it again on every test.
+    const bound = parseExpr();
+    const stop = valAddr(bound.mode === 'IDX' ? { mode: 'IND', addr: ptrAddr(bound) } : bound);
     const reg = v === sym[name] && v.mode === 'DIR' && !v.dims ? freeRegs.pop() : undefined;
     if (reg !== undefined) {
       sym[name] = { mode: 'REG', reg, addr: v.addr, dims: null };
