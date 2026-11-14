@@ -3,78 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <title>forty v0 — Minimal Pre-Heap Fortran</title>
-  <style>
-    body { margin: 16px; font: 13px/1.4 monospace; background: #0e1116; color: #e6edf3; }
-    .row { position: relative; display: grid; grid-template-columns: 320px 260px 1fr; gap: 24px; margin-top: 10px; align-items: start; }
-    #arrow { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
-    .codebox { border: 1px solid #30363d; background: #161b22; }
-    .head:has(.file) { gap: 10px; }
-    .file { position: relative; display: inline-flex; align-items: center; }
-    .file::after { content: '\25BE'; position: absolute; right: 7px; pointer-events: none; color: #8b949e; }
-    .file select { appearance: none; background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; font: inherit; font-weight: 400; height: 22px; padding: 0 22px 0 8px; cursor: pointer; }
-    .file select:hover, .file select:focus { border-color: #58a6ff; outline: none; }
-    .speed { display: inline-flex; align-items: center; gap: 6px; margin: 0 6px; color: #8b949e; }
-    .editor { position: relative; height: 260px; }
-    .editor textarea, #lines { position: absolute; inset: 0; margin: 0; box-sizing: border-box; border: 0; font: inherit; line-height: 18px; }
-    .editor textarea { z-index: 1; background: transparent; color: #e6edf3; padding: 8px 8px 26px 3ch; resize: none; white-space: pre; overflow: auto; }
-    #lines { overflow: hidden; background: #161b22; padding: 8px 0; color: #22c55e; font-weight: 700; }
-    #lines .line { display: block; height: 18px; padding: 0 0 0 1ch; cursor: default; }
-    #lines .line.hover { background: rgba(250, 204, 21, 0.25); }
-    #ram { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
-    .cell { padding: 6px; border: 1px solid #30363d; border-left: 3px solid #8b949e; background: #161b22; display: flex; flex-direction: column; }
-    .cell.rodata { border-left-color: #3b82f6; }
-    .cell.bss { border-left-color: #22c55e; }
-    .cell.linkage { border-left-color: #a855f7; }
-    .cell.scratch { border-left-color: #f59e0b; }
-    .cell.read { outline: 2px solid #22d3ee; }
-    .cell.write { outline: 2px solid #fb923c; }
-    .line { padding: 2px 6px; white-space: pre; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-    .line.active { background: #1f6feb; }
-    #code, pre { background: #161b22; border: 1px solid #30363d; padding: 6px; max-height: 260px; overflow: auto; margin: 6px 0 0; }
-    #code { margin-top: 0; max-height: 440px; }
-    .head { color: #8b949e; font-weight: 700; margin: 6px 0 4px; height: 22px; display: flex; align-items: center; }
-    .bar { display: flex; align-items: center; gap: 4px; }
-    .legend { margin-left: auto; display: flex; gap: 12px; color: #8b949e; }
-    .legend i { display: inline-block; width: 3px; height: 12px; margin-right: 5px; vertical-align: middle; }
-    .legend i.box { width: 10px; height: 10px; background: none; }
-    #effect { background: #161b22; border: 1px solid #30363d; padding: 6px; white-space: pre-wrap; }
-    #out { color-scheme: dark; height: 90px; overflow-y: scroll; scroll-snap-type: y mandatory; margin: 0; padding: 0 6px; background: linear-gradient(#0e1116, #161b22 25%, #161b22 75%, #0e1116); border: 1px solid #30363d; border-radius: 10px; }
-    /* 3 lines flat, and one rolled over the platen above and below them: a line's place in the 5-line window sets its roll. */
-    .pline { display: flex; gap: 1ch; height: 18px; line-height: 18px; white-space: pre; scroll-snap-align: start; animation: roll linear both; animation-timeline: view(); }
-    .pline .ln { width: 3ch; text-align: right; color: #8b949e; }
-    .pline.next .ln { opacity: 0.5; }
-    @keyframes roll { 0%, 16.67% { transform: scaleY(0.5); opacity: 0.3; } 33.33%, 66.67% { transform: none; opacity: 1; } 83.33%, 100% { transform: scaleY(0.5); opacity: 0.3; } }
-  </style>
+  <link rel="stylesheet" href="../visualizer.css">
 </head>
 <body>
-  <div class="bar">
-    <button id="compile">Compile</button>
-    <button id="run">Run</button>
-    <button id="stop">Stop</button>
-    <button id="step">Next</button>
-    <button id="back">Previous</button>
-    <label class="speed">Speed <input type="range" id="speed" min="1" max="9" value="5"></label>
-    <span id="status"></span>
-    <span class="legend">
-      <span><i style="background:#3b82f6"></i>constant</span>
-      <span><i style="background:#22c55e"></i>variable</span>
-      <span><i style="background:#a855f7"></i>SUB arg / return</span>
-      <span><i style="background:#f59e0b"></i>temp</span>
-      <span><i class="box" style="outline:2px solid #22d3ee"></i>read</span>
-      <span><i class="box" style="outline:2px solid #fb923c"></i>written</span>
-    </span>
-  </div>
-  <div class="row" id="board">
-    <svg id="arrow"></svg>
-    <div>
-      <div class="head">FORTRAN <label class="file"><select id="demo" title="Program to run"></select></label></div>
-      <div class="codebox"><div class="editor"><div id="lines"></div><textarea id="src" spellcheck="false" wrap="off"></textarea></div></div>
-      <div class="head">EFFECT</div><div id="effect"></div>
-      <div class="head">PRINTER</div><div id="out" title="Scroll back one line at a time"></div>
-    </div>
-    <div><div class="head">BYTECODE</div><div id="code"></div></div>
-    <div id="ram"></div>
-  </div>
-  <script type="module" src="./visualizer.js"></script>
+  <script type="module">
+    import { mount } from './visualizer.js';
+    mount();
+  </script>
 </body>
 </html>

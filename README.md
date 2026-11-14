@@ -17,6 +17,8 @@ Live demo: https://cuzzo.github.io/forty/v3
 
 The IBM 704's timings (instruction cycles, drum, tape and card punch speeds) are set once, in [machine.js](machine.js), for every version that counts time.
 
+Every version's page is the same visualizer, [visualizer.js](visualizer.js). Each `vN/visualizer.js` only names that version's compiler, VM, memory size and the features it has covered so far (v4 still has its own page).
+
 The minimal compiler assumes knowledge of how tokenizing and machine code works.
 
 For an example of how that works, see [Puck](https://github.com/cuzzo/clear/tree/master/examples/puck/README.md), which starts at ~80 SLoC, and has 10 versions of its own.
