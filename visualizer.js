@@ -506,7 +506,6 @@ function page(has, language) {
     <label class="speed" title="The drum as main memory, and core as a cache of a few of its lines">
       <input type="checkbox" id="cache"> cache
     </label>
-    <span id="status"></span>
     <span class="legend">${legend}
       <span><i class="box" style="outline:2px solid #22d3ee"></i>read</span>
       <span><i class="box" style="outline:2px solid #fb923c"></i>written</span>
@@ -518,6 +517,7 @@ function page(has, language) {
       <div class="head">${language} <label class="file"><select id="demo" title="Program to run"></select></label></div>
       <div class="codebox"><div class="editor"><div id="lines"></div><textarea id="src" spellcheck="false" wrap="off"></textarea></div></div>
       <div class="head">EFFECT</div><div id="effect"></div>
+      <div id="status"></div>
       <div class="head">PRINTER</div><div id="out" title="Scroll back one line at a time"></div>
       ${has('cards') ? '<div class="head">CARDS</div><div id="cards"></div>' : ''}
     </div>
@@ -698,12 +698,18 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   const savingNote = (n) => (n > 0 ? ` (saves ${n} cycles)` : n < 0 ? ` (costs ${-n} cycles)` : '');
   const gainOf = (instr) => (has('index') ? saving(instr) : 0);
 
+  // Two rows of labelled values, each row two fields wide.
+  function renderStatus(...rows) {
+    const field = ([label, value] = ['', '']) => [el('span', { class: 'label', text: label }), el('span', { text: String(value) })];
+    statusBox.replaceChildren(...rows.flatMap((row) => [...field(row[0]), ...field(row[1])]));
+  }
+
   function render(focusIp = null) {
     if (!prog) {
       const [DRUM, TAPE] = devices();
       const idleCache = cacheBox.checked && !has('drum') ? { lines: [], fetched: [], time: 0 } : undefined;
       renderDevices({ DRUM, TAPE, MEM: [], cache: idleCache, cycles: 0, tapePos: 0, io: null });
-      statusBox.textContent = 'not compiled';
+      renderStatus([['STATE', 'not compiled']], []);
       effectBox.textContent = '';
       renderPaper(outBox, []);
       for (const box of [ramBox, codeBox, arrowSvg, ...document.querySelectorAll('#cards, #riscv, #regs')]) box.replaceChildren();
@@ -723,8 +729,9 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const writes = new Set(last.writes);
     const code = view ? view.code : prog.code.map((_, i) => instruction(prog, s.MEM, i));
 
-    const clock = 'cycles' in s ? `cycle ${s.cycles} | waited ${s.waited}` : `steps ${s.steps}`;
-    statusBox.textContent = view ? `compiling: ${building}/${prog.events.length}` : `pc ${s.pc ?? '-'} | next ${nextIp ?? '-'} | ${clock}${s.halted ? ' | HALTED' : ''}`;
+    const clock = 'cycles' in s ? [['CYCLE', s.cycles], ['WAITED', s.waited]] : [['STEPS', s.steps]];
+    if (view) renderStatus([['COMPILING', `${building} of ${prog.events.length}`]], []);
+    else renderStatus([['PC', s.pc ?? '-'], ['NEXT', s.halted ? 'halted' : nextIp ?? '-']], clock);
     effectBox.textContent = view ? '' : effect(prog, s) + (s.io || s.halted ? '' : savingNote(gainOf(instruction(prog, s.MEM, s.ip))));
     renderPaper(outBox, has('lisp') ? printedLines(prog, s.stdout) : s.stdout);
     if (has('cards')) {
@@ -856,7 +863,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     } catch (e) {
       stop();
       render();
-      statusBox.textContent = 'error';
+      renderStatus([['STATE', 'error']], []);
       effectBox.textContent = e.message;
     }
   }
