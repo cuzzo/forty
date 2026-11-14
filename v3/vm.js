@@ -1,3 +1,8 @@
+import { COST, RECORDS, RECORD_SPAN, RECORD_WORDS, REWIND_SPEED, SECTORS, SECTOR_WORDS, ioWait } from '../machine.js';
+
+// The machine's timings are shared by every version.
+export * from '../machine.js';
+
 export const ALU = {
   '+':  (x, y) => (x + y) | 0,
   '-':  (x, y) => (x - y) | 0,
@@ -13,41 +18,6 @@ export const ALU = {
 };
 
 const OPS = ['HALT', 'MOV', 'LOAD_IND', 'STORE_IND', 'PRINT', 'JMP', 'JAL', 'JMP_IND', 'JZ', 'DRUM_READ', 'TAPE_READ', 'REWIND', ...Object.keys(ALU)];
-
-// One cycle is one IBM 704 instruction (24 µs). The IBM 733 drum moved a word past its head every 100 µs (about 4
-// instructions) and turned once every ~24 ms (about 1,000): here 32 sectors of 8 words, 1,024 cycles a turn.
-export const SECTORS = 32;
-export const SECTOR_WORDS = 8;
-export const DRUM_WORD_CYCLES = 4;
-const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
-export const RECORDS = 64;
-export const RECORD_WORDS = 8;
-// The IBM 727 tape read 15,000 characters a second, so a 36-bit word (6 characters) took 400 µs, about 16
-// instructions, and the 3/4-inch gap between records about 10 ms, about 400. Rewinding is faster than reading;
-// 5 times faster is an estimate. Tape positions count cycles of tape moving at reading speed.
-export const TAPE_WORD_CYCLES = 16;
-export const GAP = 400;
-export const REWIND_SPEED = 5;
-export const RECORD_SPAN = GAP + RECORD_WORDS * TAPE_WORD_CYCLES;
-
-// The drum turns one word past the head every DRUM_WORD_CYCLES cycles.
-export const headAt = (cycles) => {
-  const word = Math.floor(cycles / DRUM_WORD_CYCLES) % (SECTORS * SECTOR_WORDS);
-  return { sector: Math.floor(word / SECTOR_WORDS), word: word % SECTOR_WORDS };
-};
-
-// Cycles left before a read's next word can be copied (a drum word as it starts under the head, a tape word once it
-// has passed it), or before a rewind finishes; 0 when a word is copied now.
-export const ioWait = ({ io, cycles, tapePos }) => {
-  if (!io) return 0;
-  if (io.kind === 'rewind') return Math.ceil(tapePos / REWIND_SPEED);
-  if (io.kind === 'tape') {
-    if (io.done === io.count) return RECORD_SPAN - 1 - (tapePos % RECORD_SPAN);
-    const t = (tapePos % RECORD_SPAN) - GAP;
-    return TAPE_WORD_CYCLES - 1 - (t < 0 ? t : t % TAPE_WORD_CYCLES);
-  }
-  return ((io.sector * SECTOR_WORDS + io.done) * DRUM_WORD_CYCLES - (cycles % TURN) + TURN) % TURN;
-};
 
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
 export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
@@ -113,8 +83,8 @@ export function createVM(initMem, drum = [], tape = []) {
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length, cycles, waited, tapePos, io });
     if (io) return ioCycle();
     pc = ip;
-    cycles++;
     const [op, a, b, c] = decode(MEM[ip++]);
+    cycles += COST[op] ?? 2;
     const reads = [];
     const writes = [];
 

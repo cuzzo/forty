@@ -23,17 +23,17 @@ this tape's records are 8 words, so `DIM BUF(16)` with `READ TAPE BUF` stops.
 
 ## What the VM adds
 
-A tape position. The timings follow the IBM 727 tape drive, with one cycle being
-one IBM 704 instruction (24 µs):
+A tape position. The timings follow the IBM 727 tape drive, in v2's 704 cycles of
+12 µs ([machine.js](../machine.js)):
 
 | | IBM 727 | Here |
 | --- | --- | --- |
-| reading a 36-bit word (6 characters at 15,000 a second) | 400 µs | 16 cycles |
-| the 3/4-inch gap the tape starts in before each record | ~10 ms | 400 cycles |
-| rewinding | faster than reading | 5 times faster (an estimate) |
+| reading a word (2,500 words a second) | 400 µs | 33 cycles |
+| the 3/4-inch gap the tape starts in before each record | ~10 ms | 833 cycles |
+| rewinding under 450 feet | 75 inches a second, as fast as reading | the same |
 
-A record of 8 words therefore takes 528 cycles to read, and the drum (v2) keeps
-its IBM 733 speed: a word every 4 cycles, a turn every 1,024.
+A record of 8 words therefore takes 1,097 cycles to read. The drum (v2) turns once
+every 2,048.
 
 ---
 
@@ -54,12 +54,12 @@ It prints `153` (the first word of record 20), then `1` (record 1 again).
 
 | | Cycles waiting on the tape |
 | --- | --- |
-| 21 reads, 528 cycles each | 11,088 |
-| the rewind over 20 records | 2,112 |
+| 21 reads, 1,097 cycles each | 23,037 |
+| the rewind over 20 records | 21,940 |
 
 Reading in order costs the same every time. Going back costs a rewind over
 everything read so far, and that grows the further along the tape you are: this
-one is already longer than the drum's worst wait of one turn (1,024 cycles).
+one is already ten times the drum's worst wait of one turn (2,048 cycles).
 
 ## Drum or tape?
 

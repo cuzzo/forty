@@ -7,29 +7,13 @@ v5 starts from v3 and adds two things from the IBM 704:
 2. **`PUNCH`.** Real FORTRAN sent `PRINT` to the line printer and `PUNCH` to the card punch.
    v5 keeps `PRINT` as before and adds `PUNCH`, which punches cards.
 
-To compare the two honestly, v5 also counts time the way the 704 did.
-
 ---
 
-## Time: 704 cycles
+## Time
 
-One cycle is now one core memory cycle, 12 µs. Every 4-tuple costs what its 704
-instructions would take, from the 704 *Manual of Operation*: 2 cycles for each `CLA`, `ADD`,
-`STO`, `LXD`, `TXI` and the like, and 20 for a multiply or divide.
-
-| 4-tuple | 704 instructions | Cycles |
-| --- | --- | --- |
-| `MOV` | `CLA`, `STO` | 4 |
-| `+ -` | `CLA`, `ADD`, `STO` | 6 |
-| `* / MOD` | `LDQ`, `MPY` or `DVP`, `STQ` | 24 |
-| `JZ` | `CLA`, `TZE` | 4 |
-| `LXD`, `TXH`, `TXI` | themselves | 2 |
-| `PXD` | `PXD`, `STO` | 4 |
-
-The drum, tape and card punch keep their real speeds in these units: a drum word every 8
-cycles (96 µs) and a turn every 2,048 (24 ms); a tape word every 33 cycles (400 µs) and 833
-for the gap between records (10 ms). Short rewinds run at reading speed (the manual: 75
-inches a second under 450 feet), and a card takes 50,000 cycles (100 cards a minute).
+v5 counts 704 cycles as v2 and v3 do ([machine.js](../machine.js)). Its new instructions
+cost `LXD`, `TXH` and `TXI` 2 cycles each, and `PXD` 4 (`PXD`, then `STO`). A punched card
+takes 50,000 cycles (100 cards a minute).
 
 ---
 

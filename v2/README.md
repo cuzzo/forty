@@ -25,9 +25,24 @@ start of the sector on through the following sectors: `DIM BUF(12)` reads 12.
 
 ## What the VM adds
 
-A cycle counter. Every instruction takes one cycle, and the drum's position comes
-from the cycle count. A `DRUM_READ` then takes many cycles: it waits for its
-sector, then copies one word every 4 cycles into memory.
+A cycle counter. One cycle is one IBM 704 core memory cycle, 12 µs, and each
+instruction costs the cycles of the 704 instructions it stands for (from the 704
+*Manual of Operation*):
+
+| Instruction | 704 instructions | Cycles |
+| --- | --- | --- |
+| `MOV` | `CLA`, `STO` | 4 |
+| `+ -` | `CLA`, `ADD`, `STO` | 6 |
+| `* / MOD` | `LDQ`, `MPY` or `DVP`, `STQ` | 24 |
+| `JZ` | `CLA`, `TZE` | 4 |
+| `LOAD_IND`, `STORE_IND` | through an index register | 6 |
+
+The drum's position comes from the cycle count, at the IBM 733's speed: a word
+every 8 cycles (96 µs), a turn every 2,048 (24 ms). A `DRUM_READ` waits for its
+sector, then copies one word every 8 cycles into memory.
+
+These timings are set once, in [machine.js](../machine.js), for every version from
+here on.
 
 ---
 
@@ -54,17 +69,18 @@ The two demos run the same program with the drum laid out two ways:
 
 | Demo | Block `K` is stored in sector | Cycles | Of which waiting for the drum |
 | --- | --- | --- | --- |
-| `drum_in_order.f` | `K` | 16,966 | 15,775 |
-| `drum_interleaved.f` | `K * 5 mod 32` | 3,526 | 2,335 |
+| `drum_in_order.f` | `K` | 34,161 | 27,381 |
+| `drum_interleaved.f` | `K * 9 mod 32` | 11,121 | 4,341 |
 
-**In order**, adding up 8 numbers takes about 60 cycles, a little under 2 sectors
-of drum turn. The next sector has already gone by, so every read waits almost a
-whole turn.
+**In order**, adding up 8 numbers takes about 420 cycles, a little over 6½ sectors
+of drum turn. The next sector has long gone by, so every read waits most of a
+turn.
 
-**Interleaved**, each block is 5 sectors after the last, so it arrives just as the
-adding finishes. Of the 2,335 waiting cycles, 512 are the words themselves
-passing the head (128 words x 4) and about 1,000 are the very first read waiting
-for sector 0.
+**Interleaved**, each block is 9 sectors after the last: one sector to read it,
+6½ to add it up, and the rest to spare. 8 would be tighter, but 8 divides 32, so
+block 4 would land on block 0's sector. Of the 4,341 waiting cycles, 1,024 are the
+words themselves passing the head (128 words x 8) and 2,031 are the very first read
+waiting for sector 0.
 
 Drum programmers placed their data (and on drum-memory machines like the IBM 650,
 their instructions) this way on purpose. IBM's SOAP assembler did it for them.
@@ -74,7 +90,7 @@ their instructions) this way on purpose. IBM's SOAP assembler did it for them.
 The drum is drawn as a three-row reel under the bytecode. The middle row is the
 sector under the head; the faint rows are the one just gone and the one coming
 next. EFFECT counts the wait down, and words copied into memory turn orange.
-A wait is up to a thousand cycles, so **Next** moves one sector's worth of it (or
+A wait is up to 2,048 cycles, so **Next** moves one sector's worth of it (or
 one word of a transfer) at a time, and **Previous** undoes the same.
 
 Next, [v3](../v3/README.md) adds a tape.

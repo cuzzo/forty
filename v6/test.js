@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CARD_ROWS, COST, DRUM_WORD_CYCLES, RECORD_SPAN, ROW_CYCLES, SECTORS, SECTOR_WORDS, createVM, decode, encode, ioWait, tagOf, tagged } from './vm.js';
+import { CARD_ROWS, COST_704, DRUM_WORD_CYCLES, RECORD_SPAN, ROW_CYCLES, SECTORS, SECTOR_WORDS, createVM, decode, encode, ioWait, tagOf, tagged } from './vm.js';
 import { DEMOS, MEM_SIZE, TAPE_DATA, asm, compileView, describe, drumLayout, effect, layout, haltLine, marks } from './visualizer.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
@@ -81,8 +81,8 @@ test('v6 calls a SUB with TSX through index register C, and reaches arguments th
 
 test('v6 charges 2 cycles an instruction, 20 for MPY and DVP', () => {
   const { prog, state } = run('X = 6 * 7\nY = X / 2\nPRINT Y');
-  assert.equal(state.cycles, prog.code.reduce((sum, [op]) => sum + (COST[op] ?? 2), 0));
-  assert.deepEqual([COST.MPY, COST.DVP, state.stdout], [20, 20, [21]]);
+  assert.equal(state.cycles, prog.code.reduce((sum, [op]) => sum + (COST_704[op] ?? 2), 0));
+  assert.deepEqual([COST_704.MPY, COST_704.DVP, state.stdout], [20, 20, [21]]);
 });
 
 test('v6 Back restores the AC, the MQ and the index registers', () => {

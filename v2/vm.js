@@ -1,3 +1,8 @@
+import { COST, SECTORS, SECTOR_WORDS, ioWait } from '../machine.js';
+
+// The machine's timings are shared by every version.
+export * from '../machine.js';
+
 export const ALU = {
   '+':  (x, y) => (x + y) | 0,
   '-':  (x, y) => (x - y) | 0,
@@ -13,22 +18,6 @@ export const ALU = {
 };
 
 const OPS = ['HALT', 'MOV', 'LOAD_IND', 'STORE_IND', 'PRINT', 'JMP', 'JAL', 'JMP_IND', 'JZ', 'DRUM_READ', ...Object.keys(ALU)];
-
-// One cycle is one IBM 704 instruction (24 µs). The IBM 733 drum moved a word past its head every 100 µs (about 4
-// instructions) and turned once every ~24 ms (about 1,000): here 32 sectors of 8 words, 1,024 cycles a turn.
-export const SECTORS = 32;
-export const SECTOR_WORDS = 8;
-export const DRUM_WORD_CYCLES = 4;
-const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
-
-// The drum turns one word past the head every DRUM_WORD_CYCLES cycles.
-export const headAt = (cycles) => {
-  const word = Math.floor(cycles / DRUM_WORD_CYCLES) % (SECTORS * SECTOR_WORDS);
-  return { sector: Math.floor(word / SECTOR_WORDS), word: word % SECTOR_WORDS };
-};
-
-// Cycles until the next word a DRUM_READ needs starts under the head (0 when none is waited for).
-export const waitCycles = ({ io, cycles }) => (io ? ((io.sector * SECTOR_WORDS + io.done) * DRUM_WORD_CYCLES - (cycles % TURN) + TURN) % TURN : 0);
 
 // One instruction per 32-bit word: 5-bit opcode, then three 9-bit operands.
 export const encode = ([op, a, b, c]) => (OPS.indexOf(op) << 27) | (a << 18) | (b << 9) | c;
@@ -51,7 +40,7 @@ export function createVM(initMem, drum = []) {
 
   // One cycle of a DRUM_READ in progress, all of it spent waiting on the drum: copy the next word if it starts now.
   function drumCycle() {
-    const wait = waitCycles({ io, cycles });
+    const wait = ioWait({ io, cycles });
     cycles++;
     waited++;
     if (wait) return view();
@@ -72,8 +61,8 @@ export function createVM(initMem, drum = []) {
     history.push({ pc, ip, mem: MEM.slice(), stdoutLen: stdout.length, cycles, waited, io });
     if (io) return drumCycle();
     pc = ip;
-    cycles++;
     const [op, a, b, c] = decode(MEM[ip++]);
+    cycles += COST[op] ?? 2;
     const reads = [];
     const writes = [];
 
@@ -108,7 +97,7 @@ export function createVM(initMem, drum = []) {
     } else if (op === 'DRUM_READ') {
       reads.push(at(b));
       if (MEM[b] < 0 || MEM[b] >= SECTORS) throw new Error(`No drum sector ${MEM[b]}`);
-      io = { sector: MEM[b], addr: MEM[a], done: 0, count: c };
+      io = { kind: 'drum', sector: MEM[b], addr: MEM[a], done: 0, count: c };
       ip = pc;
     } else if (op in ALU) {
       reads.push(at(b), at(c));

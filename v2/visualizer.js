@@ -1,5 +1,5 @@
 import { compile } from './compiler.js';
-import { ALU, DRUM_WORD_CYCLES, SECTORS, SECTOR_WORDS, createVM, decode, headAt, waitCycles } from './vm.js';
+import { ALU, COST, DRUM_WORD_CYCLES, SECTORS, SECTOR_WORDS, createVM, decode, headAt, ioWait } from './vm.js';
 
 export const MEM_SIZE = 128;
 
@@ -36,8 +36,8 @@ export const DEMOS = {
   },
   drumSkip: {
     name: 'drum_interleaved.f',
-    code: 'DIM BUF(8)\nSKIP = 5\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 32), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
-    drum: drumLayout(5),
+    code: 'DIM BUF(8)\nSKIP = 9\nSUM = 0\nDO K = 0, 15\n  READ DRUM MOD(K * SKIP, 32), BUF\n  DO I = 0, 7\n    SUM = SUM + BUF[I]\n  END\nEND\nPRINT SUM',
+    drum: drumLayout(9),
   },
 };
 
@@ -72,7 +72,7 @@ export function effect(prog, state) {
   const name = (i) => prog.cells[i]?.label || `M[${i}]`;
   if (state.io) {
     const { sector, addr, done } = state.io;
-    const wait = waitCycles(state);
+    const wait = ioWait(state);
     if (wait) return `${done ? 'reading' : 'waiting for'} drum sector ${sector}: ${done ? 'next word in ' : ''}${wait} cycle${wait === 1 ? '' : 's'}${done ? '' : ' left'}`;
     const k = (sector * SECTOR_WORDS + done) % state.DRUM.length;
     return `drum sector ${Math.floor(k / SECTOR_WORDS)} word ${k % SECTOR_WORDS} (${state.DRUM[k]}) -> ${name(addr + done)}`;
@@ -89,7 +89,7 @@ export function effect(prog, state) {
   if (op === 'JMP_IND') return `return to ${M[a]} (from ${name(a)})`;
   if (op === 'JZ') return M[b] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`;
   if (op === 'DRUM_READ') {
-    const wait = waitCycles({ io: { sector: M[b], done: 0 }, cycles: state.cycles + 1 });
+    const wait = ioWait({ io: { kind: 'drum', sector: M[b], done: 0 }, cycles: state.cycles + COST.DRUM_READ });
     return `read drum sector ${val(b)} -> ${name(M[a])}..${name(M[a] + c - 1)}, waiting ${wait} cycle${wait === 1 ? '' : 's'} first`;
   }
   if (!(op in ALU)) return `unknown opcode ${op}`;
