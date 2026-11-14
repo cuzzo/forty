@@ -523,7 +523,7 @@ function page(has, language) {
     </div>
     <div>
       <div class="head">BYTECODE</div><div id="code"></div>
-      ${has('drum') ? '<div class="head" id="drum-head">DRUM</div><div id="drum"></div>' : ''}
+      <div class="head" id="drum-head">DRUM</div><div id="drum"></div>
       ${has('tape') ? '<div class="head" id="tape-head">TAPE</div><div id="tape"></div>' : ''}
       ${has('riscv') ? '<div class="head">RISC-V</div><div id="riscv"></div>' : ''}
     </div>
@@ -587,20 +587,46 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   }
 
   // A reel: the sector under the head in the middle, the one just gone above, the next one below.
-  function renderDrum({ DRUM: words, cycles, io }) {
-    const head = headAt(cycles);
-    // A read starts at its sector and runs on through the following ones.
+  const sec2 = (sec) => `S${String(sec).padStart(2, '0')}`;
+
+  // In cache mode the drum is main memory: the track of the line used last, its sectors marked when core holds them.
+  function mainMemoryDrum({ MEM, cache }) {
+    const track = Math.floor((cache.lines.at(-1)?.line ?? 0) / SECTORS);
+    const first = track * SECTORS;
+    const marks = (lines) => new Set(lines.filter((line) => line >= first && line < first + SECTORS).map((line) => line - first));
+    const held = marks(cache.lines.map(({ line }) => line));
+    const fetched = marks(cache.fetched);
+    $('drum-head').textContent = `DRUM  main memory, track ${track}${fetched.size ? `  reading ${[...fetched].map(sec2).join(' ')}` : ''}`;
+    return {
+      head: headAt(cache.time),
+      words: Array.from({ length: SECTORS * SECTOR_WORDS }, (_, i) => MEM[first * SECTOR_WORDS + i] ?? ''),
+      sectorClass: (sec) => `${held.has(sec) ? ' cached' : ''}${fetched.has(sec) ? ' want' : ''}`,
+      wordClass: () => '',
+    };
+  }
+
+  // The drum as a device the program reads: a read starts at its sector and runs on through the following ones.
+  function deviceDrum({ DRUM: words, cycles, io }) {
     const drumIo = io?.sector === undefined ? null : io;
     const fromStart = (sec, w) => (sec * SECTOR_WORDS + w - (drumIo?.sector ?? 0) * SECTOR_WORDS + words.length) % words.length;
-    const sec2 = (sec) => `S${String(sec).padStart(2, '0')}`;
     $('drum-head').textContent = `DRUM${drumIo ? `  reading ${sec2(io.sector)}` : ''}`;
+    return {
+      head: headAt(cycles),
+      words,
+      sectorClass: (sec) => (drumIo && fromStart(sec, 0) < drumIo.count ? ' want' : ''),
+      wordClass: (sec, w) => (drumIo && fromStart(sec, w) < drumIo.done ? ' copied' : ''),
+    };
+  }
+
+  function renderDrum(s) {
+    const { head, words, sectorClass, wordClass } = s.cache ? mainMemoryDrum(s) : deviceDrum(s);
     $('drum').replaceChildren(...[-1, 0, 1].map((d) => {
       const sec = (head.sector + d + SECTORS) % SECTORS;
-      return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${drumIo && fromStart(sec, 0) < drumIo.count ? ' want' : ''}` },
+      return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${sectorClass(sec)}` },
         el('span', { class: 'mark', text: d === 0 ? 'HEAD' : '' }),
         el('span', { class: 'sec', text: sec2(sec) }),
         ...Array.from({ length: SECTOR_WORDS }, (_, w) => el('span', {
-          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${drumIo && fromStart(sec, w) < drumIo.done ? ' copied' : ''}`,
+          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${wordClass(sec, w)}`,
           text: String(words[sec * SECTOR_WORDS + w]),
         })));
     }));
@@ -625,7 +651,9 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
 
   // The drum and tape as a machine state has them.
   function renderDevices(s) {
-    if (has('drum')) renderDrum(s);
+    const drumShown = has('drum') || Boolean(s.cache);
+    $('drum-head').hidden = $('drum').hidden = !drumShown;
+    if (drumShown) renderDrum(s);
     if (has('tape')) renderTape(s);
   }
 
@@ -673,7 +701,8 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   function render(focusIp = null) {
     if (!prog) {
       const [DRUM, TAPE] = devices();
-      renderDevices({ DRUM, TAPE, cycles: 0, tapePos: 0, io: null });
+      const idleCache = cacheBox.checked && !has('drum') ? { lines: [], fetched: [], time: 0 } : undefined;
+      renderDevices({ DRUM, TAPE, MEM: [], cache: idleCache, cycles: 0, tapePos: 0, io: null });
       statusBox.textContent = 'not compiled';
       effectBox.textContent = '';
       renderPaper(outBox, []);

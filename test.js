@@ -22,6 +22,7 @@ test('cache mode changes only time: same output, same memory, more cycles, a mis
   const withCache = runToEnd(cached(createV6(prog.initMem), true));
   assert.deepEqual([withCache.stdout, Array.from(withCache.MEM)], [plain.stdout, Array.from(plain.MEM)]);
   assert.equal(withCache.cycles, plain.cycles + withCache.cache.stalled);
+  assert.equal(withCache.cache.time, withCache.cycles);
   assert.ok(withCache.cache.misses > 0 && withCache.cache.hits > withCache.cache.misses);
   assert.ok(withCache.cache.lines.length <= CACHE_LINES);
   // A miss waits at most one drum turn, plus the line's copy; a written line waits again when it leaves.
@@ -53,12 +54,14 @@ test('cache mode puts Lisp\'s 768 words on several drum tracks, and is off for d
   const state = runToEnd(cached(createLisp(prog.code, prog.initMem), false));
   assert.deepEqual(lisp.printedLines(prog, state.stdout), ['ADDER', 'ADD3', '7', '15']);
   assert.ok(state.cache.lines.some(({ line }) => line * SECTOR_WORDS >= SECTORS * SECTOR_WORDS));
+  assert.equal(state.cache.time, state.cycles);
   assert.equal(lineOf(767), 95);
   assert.equal(cacheable(prog), true);
   assert.equal(cacheable(v6.layout(v6.DEMOS.drumSeq.code)), false);
   // A machine stepped past its end, or one that faults, leaves the cache as it was.
   const machine = cached(createV1(v1.layout('X = 0\nY = 5 / X').initMem), true);
   machine.step();
+  assert.equal(machine.getState().cache.time, 2 + machine.getState().cache.stalled);
   const kept = JSON.stringify(machine.getState().cache);
   assert.throws(() => machine.step(), /Division by zero/);
   assert.equal(JSON.stringify(machine.getState().cache), kept);

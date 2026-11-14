@@ -86,7 +86,7 @@ export function cached(machine, codeInMemory) {
     getState() {
       const s = machine.getState();
       const clock = 'cycles' in s ? { cycles: s.cycles + stalled, waited: s.waited + stalled } : {};
-      return { ...s, ...clock, cache: { lines: lines.map((entry) => ({ ...entry })), stalled, hits, misses, fetched } };
+      return { ...s, ...clock, cache: { lines: lines.map((entry) => ({ ...entry })), stalled, hits, misses, fetched, time: now(s) } };
     },
   };
 }
