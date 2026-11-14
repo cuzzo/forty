@@ -3,7 +3,8 @@
 //
 // Features: 'code' (the program is in memory, v1), 'drum' (v2), 'tape' (v3), 'cards' and 'index' (punched cards
 // and index registers, v5), 'riscv' (the program as RV32IM assembly, v4), 'accumulator' (one-address 704 code with
-// the AC and MQ, v6), 'stack' (a call stack in core memory, with index register C holding the frame: puck/).
+// the AC and MQ, v6), 'stack' (a call stack in core memory, with index register C holding the frame: puck/), 'lisp'
+// (a Lisp interpreter in forty machine code, its program and values in cons cells: lisp/).
 import { CARD_ROWS, COST, COST_704, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, headAt, ioWait } from './machine.js';
 
 // The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
@@ -270,6 +271,53 @@ export function stackLabels(prog, state) {
 // the frame starts.
 const stackCell = (label) => ({ role: label.endsWith('.ret') ? 'stack frame' : 'stack', label });
 
+// A value as the Lisp machine (lisp/) holds it: NIL is 0, an integer n is 2n + 1, and a symbol or a cons cell is its
+// address. A cons cell shows as @address.
+export function lispValue(prog, value) {
+  if (value === 0) return 'NIL';
+  if (value % 2) return String((value - 1) / 2);
+  return prog.symbolNames[value]?.trim() ?? `@${value}`;
+}
+
+// The expression at value, read back out of memory; a long or circular one is cut short.
+export function lispText(prog, mem, value, budget = { atoms: 40 }) {
+  if (--budget.atoms < 0) return '...';
+  if (value < prog.consBase || value % 2) return lispValue(prog, value);
+  const items = [];
+  let cell = value;
+  while (cell >= prog.consBase && cell % 2 === 0 && budget.atoms > 0) {
+    items.push(lispText(prog, mem, mem[cell], budget));
+    cell = mem[cell + 1];
+  }
+  const tail = cell === 0 ? '' : ` . ${lispText(prog, mem, cell, budget)}`;
+  return `(${items.join(' ')}${tail})`;
+}
+
+// What the Lisp machine has printed, one line per value. Its print emits each symbol, number, parenthesis and dot as
+// a value of its own, and a newline symbol after each top-level value.
+export function printedLines(prog, stdout) {
+  const lines = [[]];
+  for (const value of stdout) {
+    if (value === prog.newline) lines.push([]);
+    else lines.at(-1).push(lispValue(prog, value));
+  }
+  if (!lines.at(-1).length) lines.pop();
+  return lines.map((tokens) => tokens.join(' ').replaceAll('( ', '(').replaceAll(' )', ')'));
+}
+
+// The source line of the expression the newest eval is working on.
+export function lispLine(prog, state) {
+  const names = stackLabels(prog, state);
+  for (let i = names.length - 1; i >= 0; i--) {
+    if (names[i] === 'eval.x' && prog.lines[state.MEM[i]]) return prog.lines[state.MEM[i]];
+  }
+  return null;
+}
+
+// One Lisp step: run to the next call of eval, or to the end.
+const LISP_STEP_LIMIT = 100000;
+export const lispStep = (evalEntry) => (start, s, ran) => s.halted || s.ip === evalEntry || ran >= LISP_STEP_LIMIT;
+
 // demos and language: a version that is not FORTRAN (puck/) brings its own programs and names its language.
 export function visualizer({ compiler, vm, features, drumSkip = 9, demos: ownDemos, language = 'FORTRAN' }) {
   const has = (feature) => features.includes(feature);
@@ -313,6 +361,7 @@ export function visualizer({ compiler, vm, features, drumSkip = 9, demos: ownDem
     const name = (i) => (tagOf(i) ? `${label(ea(i))} [via ${reg(tagOf(i) - 1)}]` : label(i));
     const names = { ea, label, name, val: (i) => `${name(i)} (${M[ea(i)]})` };
     if (state.io) return deviceEffect(state, name);
+    if (has('lisp') && state.ip === prog.evalEntry) return `eval ${lispText(prog, M, M[state.XR[2] + 2])}`;
     const instr = instruction(prog, M, state.ip);
     return sharedEffect(instr, state, names, ibm704 ? COST_704.DRUM_READ ?? 2 : COST.DRUM_READ)
       ?? (ibm704 ? effect704(instr, state, names, { TESTS: vm.TESTS, tagOf, addrOf }) : tupleEffect(instr, state, names, vm.ALU));
@@ -333,10 +382,17 @@ export function visualizer({ compiler, vm, features, drumSkip = 9, demos: ownDem
   return { MEM_SIZE: vm.MEM_WORDS, DEMOS, layout, effect, describe, asm, saving, mount };
 }
 
-// Next and Previous over a VM. One advance is one instruction, one word read, one card row punched, or up to one
-// sector of a device wait. Each records the VM's step count before it, so back() undoes exactly one advance, even one
-// a fault cut short. gainAt(state): the cycles the index registers save on the instruction about to run.
-export function stepper(machine, gainAt) {
+// Where an advance stops by default: after one instruction, one word read, one card row punched, or up to one
+// sector of a device wait.
+function deviceStep(start, s, ran) {
+  const batch = s.io?.kind === 'punch' ? ROW_CYCLES : SECTOR_WORDS * DRUM_WORD_CYCLES;
+  return !(s.io && s.io.done === start.io?.done && ran < batch);
+}
+
+// Next and Previous over a VM. Each advance records the VM's step count before it, so back() undoes exactly one
+// advance, even one a fault cut short. gainAt(state): the cycles the index registers save on the instruction about to
+// run. stopAt(start, state, steps run): where an advance stops.
+export function stepper(machine, gainAt, stopAt = deviceStep) {
   const batches = [];
   return {
     advance() {
@@ -344,12 +400,10 @@ export function stepper(machine, gainAt) {
       const batch = { steps: s.steps, gain: gainAt(s) };
       const ran = () => machine.getState().steps - batch.steps;
       let last;
-      let io;
       try {
         do {
           last = machine.step();
-          io = machine.getState().io;
-        } while (io && io.done === s.io?.done && ran() < (io.kind === 'punch' ? ROW_CYCLES : SECTOR_WORDS * DRUM_WORD_CYCLES));
+        } while (!stopAt(s, machine.getState(), ran()));
       } finally {
         // A step that faults is undone by the VM, but the steps before it in this advance stay.
         if (ran()) batches.push(batch);
@@ -419,7 +473,16 @@ function renderPaper(box, lines) {
 }
 
 // Each colour, its name, and the feature it needs, if any.
-const LEGEND = [['#6e7681', 'code', 'code'], ['#3b82f6', 'constant'], ['#22c55e', 'variable'], ['#a855f7', 'SUB arg / return'], ['#f59e0b', 'temp'], ['#f472b6', 'stack frame', 'stack']];
+const LEGEND = [
+  ['#6e7681', 'code', 'code'],
+  ['#3b82f6', 'constant'],
+  ['#22c55e', 'variable'],
+  ['#a855f7', 'SUB arg / return'],
+  ['#f59e0b', 'temp'],
+  ['#f472b6', 'stack frame', 'stack'],
+  ['#38bdf8', 'cons cell', 'lisp'],
+  ['#94a3b8', 'GC mark', 'lisp'],
+];
 
 function page(has, language) {
   const legend = LEGEND.filter(([, , feature]) => !feature || has(feature)).map(([color, name]) => `<span><i style="background:${color}"></i>${name}</span>`).join('');
@@ -575,6 +638,11 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     }));
   }
 
+  // A memory cell's value: Lisp's cons cells and symbol values read as Lisp values, everything else as a number.
+  function shown(cell, value) {
+    const lispCell = cell.role === 'cons' || cell.label.endsWith(' value');
+    return has('lisp') && lispCell ? lispValue(prog, value) : String(value);
+  }
   const badge = (n) => el('span', { class: `gain${n < 0 ? ' cost' : ''}`, text: n > 0 ? `+${n}` : `−${-n}` });
   const savingNote = (n) => (n > 0 ? ` (saves ${n} cycles)` : n < 0 ? ` (costs ${-n} cycles)` : '');
   const gainOf = (instr) => (has('index') ? saving(instr) : 0);
@@ -594,6 +662,8 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const s = machine.getState();
     const view = building === null ? null : compileView(prog, building);
     const m = view ? { lastIp: view.newIp, nextIp: null, lastLine: view.line, nextLine: null } : marks(prog.ipMap, s, focusIp);
+    // Lisp's lines follow the expression being evaluated, not the machine code.
+    if (!view && has('lisp') && focusIp === null) Object.assign(m, { lastLine: lispLine(prog, s), nextLine: null });
     if (!view && s.halted && focusIp === null) m.lastLine = haltLine(srcBox.value);
     const { lastIp: activeIp, nextIp, lastLine: activeLine, nextLine } = m;
     const reads = new Set(last.reads);
@@ -603,7 +673,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const clock = 'cycles' in s ? `cycle ${s.cycles} | waited ${s.waited}` : `steps ${s.steps}`;
     statusBox.textContent = view ? `compiling: ${building}/${prog.events.length}` : `pc ${s.pc ?? '-'} | next ${nextIp ?? '-'} | ${clock}${s.halted ? ' | HALTED' : ''}`;
     effectBox.textContent = view ? '' : effect(prog, s) + (s.io || s.halted ? '' : savingNote(gainOf(instruction(prog, s.MEM, s.ip))));
-    renderPaper(outBox, s.stdout);
+    renderPaper(outBox, has('lisp') ? printedLines(prog, s.stdout) : s.stdout);
     if (has('cards')) {
       $('cards').replaceChildren(...s.cards.map((values) => card(values)), ...(s.io?.kind === 'punch' ? [card(s.io.values, s.io.done)] : []));
       $('cards').scrollTop = $('cards').scrollHeight;
@@ -629,7 +699,8 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const freeCells = [];
     for (let i = 0; i < prog.initMem.length; i++) {
       const isCode = i < codeLen;
-      const placed = isCode ? code[i] !== undefined : i < (view ? view.cells : prog.usedCells) || i in frames;
+      const allocated = i < (view ? view.cells : prog.usedCells) && prog.cells[i].role !== 'unused';
+      const placed = isCode ? code[i] !== undefined : allocated || i in frames;
       if (!placed) {
         (isCode ? codeCells : freeCells).push(el('div', { class: 'cell code unused' }, el('small', { text: String(i).padStart(2, '0') })));
         continue;
@@ -647,7 +718,10 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
       },
         ...(isCode
           ? [el('small', { text: `${i === nextIp ? '> ' : ''}${String(i).padStart(2, '0')}` })]
-          : [el('small', { text: `[${i}] ${cell.label}` }), el('strong', { text: String(view ? prog.initMem[i] : s.MEM[i]) })]),
+          : [
+            el('small', { text: `[${i}] ${cell.label}` }),
+            el('strong', { text: shown(cell, view ? prog.initMem[i] : s.MEM[i]) }),
+          ]),
       ));
     }
     ramBox.replaceChildren(el('div', { class: 'code-strip' }, ...codeCells), el('div', { class: 'data-grid' }, ...dataCells), el('div', { class: 'code-strip free' }, ...freeCells));
@@ -687,7 +761,8 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   function load(walk) {
     prog = layout(srcBox.value);
     machine = start(prog);
-    run = stepper(machine, (s) => (s.io ? 0 : gainOf(instruction(prog, s.MEM, s.ip))));
+    const gainAt = (s) => (s.io ? 0 : gainOf(instruction(prog, s.MEM, s.ip)));
+    run = stepper(machine, gainAt, has('lisp') ? lispStep(prog.evalEntry) : undefined);
     if (has('riscv')) {
       try {
         riscv = emitRiscv(prog).split('\n');

@@ -29,6 +29,8 @@ body { margin: 16px; font: 13px/1.4 monospace; background: #0e1116; color: #e6ed
 .cell.scratch { border-left-color: #f59e0b; }
 .cell.stack { border-left-color: #f472b6; }
 .cell.stack.frame { border-left-width: 8px; }
+.cell.cons { border-left-color: #38bdf8; }
+.cell.mark { border-left-color: #94a3b8; }
 .cell.read { outline: 2px solid #22d3ee; }
 .cell.write { outline: 2px solid #fb923c; }
 .line { padding: 2px 6px; white-space: pre; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
