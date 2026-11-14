@@ -5,6 +5,7 @@
 // and index registers, v5), 'riscv' (the program as RV32IM assembly, v4), 'accumulator' (one-address 704 code with
 // the AC and MQ, v6), 'stack' (a call stack in core memory, with index register C holding the frame: puck/), 'lisp'
 // (a Lisp interpreter in forty machine code, its program and values in cons cells: lisp/).
+import { CACHE_LINES, cacheable, cached, lineOf } from './cache.js';
 import { CARD_ROWS, COST, COST_704, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, headAt, ioWait } from './machine.js';
 
 // The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
@@ -502,6 +503,9 @@ function page(has, language) {
     <button id="step">Next</button>
     <button id="back">Previous</button>
     <label class="speed">Speed <input type="range" id="speed" min="1" max="9" value="5"></label>
+    <label class="speed" title="The drum as main memory, and core as a cache of a few of its lines">
+      <input type="checkbox" id="cache"> cache
+    </label>
     <span id="status"></span>
     <span class="legend">${legend}
       <span><i class="box" style="outline:2px solid #22d3ee"></i>read</span>
@@ -523,7 +527,7 @@ function page(has, language) {
       ${has('tape') ? '<div class="head" id="tape-head">TAPE</div><div id="tape"></div>' : ''}
       ${has('riscv') ? '<div class="head">RISC-V</div><div id="riscv"></div>' : ''}
     </div>
-    <div>${regs}<div class="head">MEMORY</div><div id="ram"></div></div>
+    <div>${regs}<div class="head" id="memory-head">MEMORY</div><div id="ram"></div></div>
   </div>`;
 }
 
@@ -540,6 +544,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   const effectBox = $('effect');
   const speedBox = $('speed');
   const arrowSvg = $('arrow');
+  const cacheBox = $('cache');
   if (has('cards')) document.body.append(cardDigitPatterns());
 
   for (const [k, d] of Object.entries(DEMOS)) demoSel.append(el('option', { value: k, text: d.name }));
@@ -650,6 +655,17 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const lispCell = cell.role === 'cons' || cell.label.endsWith(' value');
     return has('lisp') && lispCell ? lispValue(prog, value) : String(value);
   }
+  // The MEMORY heading: in cache mode, the CACHE_LINES lines core holds (* for one written since it came in), and what
+  // the cache has cost so far.
+  function memoryHeading(s) {
+    if (!cacheBox.checked) return 'MEMORY';
+    if (!s?.cache) return prog ? 'MEMORY  cache mode is off: this program reads the drum' : 'MEMORY  cache mode';
+    const { lines, hits, misses, stalled } = s.cache;
+    const cells = (line) => `${line * SECTOR_WORDS}-${(line + 1) * SECTOR_WORDS - 1}`;
+    const held = lines.map(({ line, dirty }) => `${cells(line)}${dirty ? '*' : ''}`);
+    return `MEMORY  cache: ${held.join(' ') || 'empty'}  ·  ${hits} hits, ${misses} misses, ${stalled} cycles on the drum`;
+  }
+
   const badge = (n) => el('span', { class: `gain${n < 0 ? ' cost' : ''}`, text: n > 0 ? `+${n}` : `−${-n}` });
   const savingNote = (n) => (n > 0 ? ` (saves ${n} cycles)` : n < 0 ? ` (costs ${-n} cycles)` : '');
   const gainOf = (instr) => (has('index') ? saving(instr) : 0);
@@ -662,6 +678,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
       effectBox.textContent = '';
       renderPaper(outBox, []);
       for (const box of [ramBox, codeBox, arrowSvg, ...document.querySelectorAll('#cards, #riscv, #regs')]) box.replaceChildren();
+      $('memory-head').textContent = memoryHeading(null);
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
       return;
@@ -702,6 +719,10 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     // Code cells and free cells show only their address, so the cells in use get the room.
     const codeLen = has('code') ? prog.codeLen : 0;
     const frames = has('stack') && !view ? stackLabels(prog, s) : [];
+    // In cache mode, a cell in no cached line is on the drum: drawn dim.
+    const inCore = new Set(s.cache?.lines.map(({ line }) => line));
+    const onDrum = (i) => (s.cache && !view && !inCore.has(lineOf(i)) ? ' ondrum' : '');
+    $('memory-head').textContent = memoryHeading(s);
     const codeCells = [];
     const dataCells = [];
     const freeCells = [];
@@ -710,14 +731,16 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
       const allocated = i < (view ? view.cells : prog.usedCells) && prog.cells[i].role !== 'unused';
       const placed = isCode ? code[i] !== undefined : allocated || i in frames;
       if (!placed) {
-        (isCode ? codeCells : freeCells).push(el('div', { class: 'cell code unused' }, el('small', { text: String(i).padStart(2, '0') })));
+        const address = el('small', { text: String(i).padStart(2, '0') });
+        const chip = el('div', { class: `cell code unused${onDrum(i)}` }, address);
+        (isCode ? codeCells : freeCells).push(chip);
         continue;
       }
       const cell = i in frames ? stackCell(frames[i]) : prog.cells[i];
       const fresh = view && (view.newCell !== null ? i >= view.newCell : i === view.newIp);
       const flash = writes.has(i) || fresh ? ' write' : (reads.has(i) ? ' read' : '');
       (isCode ? codeCells : dataCells).push(el('div', {
-        class: `cell ${cell.role}${flash}${isCode && i === activeIp ? ' pc' : ''}`,
+        class: `cell ${cell.role}${flash}${isCode && i === activeIp ? ' pc' : ''}${onDrum(i)}`,
         title: isCode ? describe(code[i], prog.cells) : '',
         onMouseenter: () => (isCode
           ? codeBox.querySelector(`[data-ip="${i}"]`)?.classList.add('hover')
@@ -771,6 +794,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   function load(walk) {
     prog = layout(srcBox.value);
     machine = start(prog);
+    if (cacheBox.checked && cacheable(prog)) machine = cached(machine, has('code'));
     const gainAt = (s) => (s.io ? 0 : gainOf(instruction(prog, s.MEM, s.ip)));
     run = stepper(machine, gainAt, has('lisp') ? lispStep(prog.evalEntry) : undefined);
     if (has('riscv')) {
@@ -844,6 +868,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   }
 
   demoSel.addEventListener('change', () => { srcBox.value = demo().code; unload(); render(); });
+  cacheBox.addEventListener('change', () => { unload(); render(); });
   srcBox.addEventListener('input', () => { unload(); render(); });
   $('compile').addEventListener('click', () => act(() => {
     load(true);

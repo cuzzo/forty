@@ -22,6 +22,7 @@ For an example of how that works, see [Puck](https://github.com/cuzzo/clear/tree
 ## Files
 
 - `machine.js` — the IBM 704's timings, shared by every version that counts time.
+- `cache.js` — cache mode, shared by every version (below).
 - `visualizer.js`, `visualizer.css` — the page every version uses.
 - `vN/compiler.js`, `vN/vm.js` — each version's compiler and VM. `vN/visualizer.js` names the version's features, `vN/index.html` loads its page, and `vN/test.js` holds its tests.
 
@@ -31,6 +32,19 @@ Every version's page is the same visualizer, [visualizer.js](visualizer.js). Eac
 
  * The [puck](puck/) implementation demonstrates how a call stack works in a minimalist [ALGOL](https://en.wikipedia.org/wiki/ALGOL).
  * The [lisp](lisp/) implementation demonstrates a minimalist [Lisp](https://en.wikipedia.org/wiki/Lisp_(programming_language)), utilizing the heap and a garbage collector in core memory.
+
+## Cache mode
+
+The **cache** box on every page treats the drum as main memory and core as a cache of 4 lines, each a drum
+sector of 8 words. A word in no cached line waits for its sector to come under the drum's head (up to a turn,
+2,048 cycles) before its line is copied in, and a line that was written goes back to the drum when it leaves.
+Cells on the drum are drawn dim, and the MEMORY heading lists the cached lines (`*` for one written) and the
+hits, misses and cycles spent waiting.
+
+Only time changes: the compilers emit the same code, and memory and output come out the same. The drum gets as
+many 256-word tracks as memory needs, each with its own head, as the 704's 2,048-word drums had, so Lisp's 768
+words fit too. Lisp and v0 keep their code apart from memory, so only their data goes through the cache. A
+program that reads the drum itself can't also have it as memory, so cache mode stays off for it.
 
 ## Run in Browser
 
