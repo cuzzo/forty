@@ -241,24 +241,34 @@ function describe704([op, a, b, c], m, { tagOf, addrOf }) {
   return TEXT[op]?.() ?? `${op}: unknown opcode`;
 }
 
-// The frames of a call stack in core memory, each cell named procedure.slot, from the frame in index register C down
-// the links to main's at the base. A frame's procedure is the one its return address came back from a call to, or,
-// for a frame C has just moved to, the one the next instruction calls.
+// The procedure whose frame starts at cell c (puck/). main's is at the base of the stack. Any other was entered by a
+// JAL, which wrote its return address into the frame's first cell: the JAL just before that address names the
+// procedure. A frame C has just moved to has no return address yet, and the JAL about to run names it.
+function frameOwner(prog, state, c) {
+  if (c === prog.stackBase) return prog.main;
+  const next = prog.code[state.ip];
+  const entered = c === state.XR[2] && next?.[0] === 'JAL' ? next : prog.code[state.MEM[c] - 1];
+  return prog.procs.find((p) => p.entry === entered?.[2]);
+}
+
+// The cells of a call stack in core memory (puck/), each named procedure.slot: from the frame in index register C
+// down the links to main's, whose link, 0, is below the stack. Where frames overlap, the newer one names the cell.
 export function stackLabels(prog, state) {
   const names = [];
-  const procAt = (entry) => prog.procs.find((p) => p.entry === entry);
   for (let c = state.XR[2]; c >= prog.stackBase;) {
-    const [op, , target] = prog.code[state.ip] ?? [];
-    const proc = c === prog.stackBase ? prog.main : procAt(c === state.XR[2] && op === 'JAL' ? target : prog.code[state.MEM[c] - 1]?.[2]);
+    const proc = frameOwner(prog, state, c);
     if (!proc) break;
     proc.slots.forEach((slot, k) => { names[c + k] ??= `${proc.name}.${slot}`; });
-    // Main's link is 0, below the stack.
     const link = state.MEM[c + 1];
     if (!(link < c)) break;
     c = link;
   }
   return names;
 }
+
+// A stack cell for the memory grid. A frame's first cell, its return address, is a 'stack frame' cell, marking where
+// the frame starts.
+const stackCell = (label) => ({ role: label.endsWith('.ret') ? 'stack frame' : 'stack', label });
 
 // demos and language: a version that is not FORTRAN (puck/) brings its own programs and names its language.
 export function visualizer({ compiler, vm, features, drumSkip = 9, demos: ownDemos, language = 'FORTRAN' }) {
@@ -624,8 +634,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
         (isCode ? codeCells : freeCells).push(el('div', { class: 'cell code unused' }, el('small', { text: String(i).padStart(2, '0') })));
         continue;
       }
-      // A frame's first cell, its return address, gets the role 'stack frame' to mark where the frame starts.
-      const cell = i in frames ? { role: frames[i].endsWith('.ret') ? 'stack frame' : 'stack', label: frames[i] } : prog.cells[i];
+      const cell = i in frames ? stackCell(frames[i]) : prog.cells[i];
       const fresh = view && (view.newCell !== null ? i >= view.newCell : i === view.newIp);
       const flash = writes.has(i) || fresh ? ' write' : (reads.has(i) ? ' read' : '');
       (isCode ? codeCells : dataCells).push(el('div', {

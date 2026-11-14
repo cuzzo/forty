@@ -20,7 +20,11 @@ export function tokenize(code) {
   return tokens;
 }
 
-// Puck v4's parser, ported from examples/puck/v4/parser.rb. Nodes also keep their line, and a block's END line.
+// The operators of an expression. Only operator tokens have these values.
+const EXPRESSION_OPERATORS = new Set(['+', '-', '*', '/', '%', '=']);
+
+// Puck v4's parser, ported from examples/puck/v4/parser.rb, one function per statement. Nodes also keep their line,
+// and a block its END's line.
 export function parse(tokens) {
   let pos = 0;
 
@@ -37,44 +41,9 @@ export function parse(tokens) {
   }
 
   function parseStatement() {
-    const { type, line } = tokens[pos];
-    if (type === 'PROCEDURE') return parseProcedure();
-    if (type === 'IF') return parseIf();
-    if (type === 'LOOP') return parseLoop();
-    if (type === 'EXIT') {
-      consume('EXIT');
-      consume('OPERATOR'); // ;
-      return { type: 'Exit', line };
-    }
-    if (type === 'RETURN') {
-      consume('RETURN');
-      const expression = parseExpression();
-      consume('OPERATOR'); // ;
-      return { type: 'Return', val: expression, line };
-    }
-    if (type === 'SYSCALL') {
-      consume('SYSCALL');
-      consume('OPERATOR'); // (
-      const id = consume('INTEGER').value;
-      consume('OPERATOR'); // ,
-      const name = consume('SYMBOL').value;
-      consume('OPERATOR'); // )
-      consume('OPERATOR'); // ;
-      return { type: 'Syscall', var: name, val: id, line };
-    }
-    if (type === 'SYMBOL') {
-      const name = consume('SYMBOL').value;
-      if (tokens[pos].value === ':=') {
-        consume('OPERATOR'); // :=
-        const val = parseExpression();
-        consume('OPERATOR'); // ;
-        return { type: 'Assignment', var: name, val, line };
-      }
-      const args = parseCallArgs();
-      consume('OPERATOR'); // ;
-      return { type: 'CallStatement', var: name, val: args, line };
-    }
-    throw new SyntaxError(`Unexpected token ${JSON.stringify(tokens[pos])}`);
+    const parser = STATEMENTS[tokens[pos].type];
+    if (!parser) throw new SyntaxError(`Unexpected token ${JSON.stringify(tokens[pos])}`);
+    return parser();
   }
 
   function parseProcedure() {
@@ -104,6 +73,44 @@ export function parse(tokens) {
     const endLine = consume('END').line;
     consume('OPERATOR'); // ;
     return { type: 'Loop', val: body, line, endLine };
+  }
+
+  function parseExit() {
+    const { line } = consume('EXIT');
+    consume('OPERATOR'); // ;
+    return { type: 'Exit', line };
+  }
+
+  function parseReturn() {
+    const { line } = consume('RETURN');
+    const expression = parseExpression();
+    consume('OPERATOR'); // ;
+    return { type: 'Return', val: expression, line };
+  }
+
+  function parseSyscall() {
+    const { line } = consume('SYSCALL');
+    consume('OPERATOR'); // (
+    const id = consume('INTEGER').value;
+    consume('OPERATOR'); // ,
+    const name = consume('SYMBOL').value;
+    consume('OPERATOR'); // )
+    consume('OPERATOR'); // ;
+    return { type: 'Syscall', var: name, val: id, line };
+  }
+
+  // A statement that starts with a name: an assignment, or a call.
+  function parseNamed() {
+    const { value: name, line } = consume('SYMBOL');
+    if (tokens[pos].value === ':=') {
+      consume('OPERATOR'); // :=
+      const val = parseExpression();
+      consume('OPERATOR'); // ;
+      return { type: 'Assignment', var: name, val, line };
+    }
+    const args = parseCallArgs();
+    consume('OPERATOR'); // ;
+    return { type: 'CallStatement', var: name, val: args, line };
   }
 
   function parseParams() {
@@ -137,7 +144,7 @@ export function parse(tokens) {
   // Puck has no operator precedence: an expression runs left to right.
   function parseExpression() {
     let expression = parseTerm();
-    while (tokens[pos]?.type === 'OPERATOR' && ['+', '-', '*', '/', '%', '='].includes(tokens[pos].value)) {
+    while (EXPRESSION_OPERATORS.has(tokens[pos]?.value)) {
       const op = consume('OPERATOR').value;
       expression = { type: op === '=' ? 'Equal' : 'Math', value: op, left: expression, right: parseTerm() };
     }
@@ -146,13 +153,24 @@ export function parse(tokens) {
 
   function parseTerm() {
     if (tokens[pos].type === 'INTEGER') return { type: 'Integer', value: consume('INTEGER').value };
-    if (tokens[pos].type === 'SYMBOL') {
-      const name = consume('SYMBOL').value;
-      if (tokens[pos]?.type === 'OPERATOR' && tokens[pos].value === '(') return { type: 'Call', name, args: parseCallArgs() };
-      return { type: 'Variable', name };
+    if (tokens[pos].type !== 'SYMBOL') {
+      throw new SyntaxError(`Unexpected expression token ${JSON.stringify(tokens[pos])}`);
     }
-    throw new SyntaxError(`Unexpected expression token ${JSON.stringify(tokens[pos])}`);
+    const name = consume('SYMBOL').value;
+    if (tokens[pos]?.value === '(') return { type: 'Call', name, args: parseCallArgs() };
+    return { type: 'Variable', name };
   }
+
+  // Each statement's parser, by its first token: a keyword, or a name.
+  const STATEMENTS = {
+    PROCEDURE: parseProcedure,
+    IF: parseIf,
+    LOOP: parseLoop,
+    EXIT: parseExit,
+    RETURN: parseReturn,
+    SYSCALL: parseSyscall,
+    SYMBOL: parseNamed,
+  };
 
   return parseStatements();
 }
@@ -165,6 +183,16 @@ const ALU_OP = { '+': '+', '-': '-', '*': '*', '/': '/', '%': '%', '=': '==' };
 function at(slot) {
   if (slot > 127) throw new RangeError(`A frame of ${slot + 1} words does not fit in an operand's 7 address bits`);
   return slot | ((C + 1) << 7);
+}
+
+// A frame is [ret, link, the parameters and locals by name], with temporaries above them. top is its first free
+// slot; size, the most it has used.
+const frame = (name, params) => ({ name, names: [...params], top: 2 + params.length, size: 2 + params.length });
+
+// A frame's slot names, for the page: its temporaries are all named tmp.
+function slotNames({ name, names, size, entry }) {
+  const temporaries = Array(size - 2 - names.length).fill('tmp');
+  return { name, entry, slots: ['ret', 'link', ...names, ...temporaries] };
 }
 
 export function compile(source) {
@@ -219,10 +247,7 @@ function build(source, dataBase) {
 
   const baseCell = alloc('rodata', 'stack base');
   const RET = alloc('linkage', 'RET');
-
-  // A frame is [ret, link, the parameters and locals by name], with temporaries above them. top is its first free
-  // slot; size, the most it has used.
-  const frame = (name, params) => ({ name, names: [...params], top: 2 + params.length, size: 2 + params.length });
+  const main = frame('main', []);
 
   function claim(f, slots) {
     const slot = f.top;
@@ -246,12 +271,17 @@ function build(source, dataBase) {
     return t;
   }
 
+  // Work an expression out into the operand dest.
   function into(e, dest, f) {
-    if (e.type === 'Math' || e.type === 'Equal') emit(ALU_OP[e.value], dest, value(e.left, f), value(e.right, f));
-    else if (e.type === 'Call') {
+    if (e.type === 'Call') {
       call(e, f);
+      // RETURN f(x) leaves f's result where it already is.
       if (dest !== RET) emit('MOV', dest, RET);
-    } else emit('MOV', dest, value(e, f));
+    } else if (e.type === 'Integer' || e.type === 'Variable') {
+      emit('MOV', dest, value(e, f));
+    } else {
+      emit(ALU_OP[e.value], dest, value(e.left, f), value(e.right, f));
+    }
   }
 
   // The callee's frame starts at the caller's first free slot. Its header and arguments are claimed before the
@@ -276,57 +306,92 @@ function build(source, dataBase) {
     line = node.line;
     // A statement's temporaries die with it.
     f.top = 2 + f.names.length;
-    if (node.type === 'Procedure') {
-      const skip = emit('JMP');
-      // Registered before its body, so that the body can call it: Puck v4 registered it after, and could not recurse.
-      const proc = { ...frame(node.var, node.val.params), entry: code.length };
-      procs.push(proc);
-      statements(node.val.body, proc, null);
-      line = node.endLine;
-      emit('JMP_IND', at(0));
-      patch(skip, code.length);
-    } else if (node.type === 'Assignment') {
-      // As in Puck, a new variable is named only after its value is worked out, so it cannot be read in it.
-      const known = f.names.indexOf(node.var);
-      const slot = known < 0 ? claim(f, 1) : 2 + known;
-      into(node.val, at(slot), f);
-      if (known < 0) f.names.push(node.var);
-    } else if (node.type === 'CallStatement') {
-      call({ name: node.var, args: node.val }, f);
-    } else if (node.type === 'If') {
-      const toEnd = emit('JZ', 0, value(node.val.condition, f));
-      statements(node.val.body, f, exits);
-      patch(toEnd, code.length);
-    } else if (node.type === 'Loop') {
-      const top = code.length;
-      const ends = [];
-      statements(node.val, f, ends);
-      line = node.endLine;
-      emit('JMP', top);
-      for (const ip of ends) patch(ip, code.length);
-    } else if (node.type === 'Exit') {
-      if (!exits) throw new Error('EXIT outside LOOP');
-      exits.push(emit('JMP'));
-    } else if (node.type === 'Return') {
-      into(node.val, RET, f);
-      // The main program's RETURN ends it, as Puck's VM returns from running it.
-      if (f === main) emit('HALT');
-      else emit('JMP_IND', at(0));
-    } else if (node.type === 'Syscall') {
-      emit('PRINT', at(slotOf(f, node.var)));
-    }
+    STATEMENTS[node.type](node, f, exits);
   }
 
-  const main = frame('main', []);
+  function compileProcedure(node) {
+    const skip = emit('JMP');
+    // Registered before its body, so that the body can call it: Puck v4 registered it after, and could not recurse.
+    const proc = { ...frame(node.var, node.val.params), entry: code.length };
+    procs.push(proc);
+    statements(node.val.body, proc, null);
+    line = node.endLine;
+    emit('JMP_IND', at(0));
+    patch(skip, code.length);
+  }
+
+  function compileAssignment(node, f) {
+    const known = f.names.indexOf(node.var);
+    if (known >= 0) return into(node.val, at(2 + known), f);
+    // As in Puck, a new variable is named only after its value is worked out, so it cannot be read in it.
+    into(node.val, at(claim(f, 1)), f);
+    f.names.push(node.var);
+  }
+
+  function compileCall(node, f) {
+    call({ name: node.var, args: node.val }, f);
+  }
+
+  function compileIf(node, f, exits) {
+    const toEnd = emit('JZ', 0, value(node.val.condition, f));
+    statements(node.val.body, f, exits);
+    patch(toEnd, code.length);
+  }
+
+  function compileLoop(node, f) {
+    const top = code.length;
+    const ends = [];
+    statements(node.val, f, ends);
+    line = node.endLine;
+    emit('JMP', top);
+    for (const ip of ends) patch(ip, code.length);
+  }
+
+  function compileExit(node, f, exits) {
+    if (!exits) throw new Error('EXIT outside LOOP');
+    exits.push(emit('JMP'));
+  }
+
+  function compileReturn(node, f) {
+    into(node.val, RET, f);
+    // The main program's RETURN ends it, as Puck's VM returns from running it.
+    if (f === main) emit('HALT');
+    else emit('JMP_IND', at(0));
+  }
+
+  function compileSyscall(node, f) {
+    emit('PRINT', at(slotOf(f, node.var)));
+  }
+
+  // Each statement's code, by its node type in Puck v4's tree.
+  const STATEMENTS = {
+    Procedure: compileProcedure,
+    Assignment: compileAssignment,
+    CallStatement: compileCall,
+    If: compileIf,
+    Loop: compileLoop,
+    Exit: compileExit,
+    Return: compileReturn,
+    Syscall: compileSyscall,
+  };
+
   emit('LXD', C, baseCell);
   statements(ast, main, null);
   emit('HALT');
   // The stack starts where the data ends; main's frame there has ret and link 0, and link 0 ends the chain.
   initMem[baseCell] = nextMem;
   code.forEach((instr, ip) => { initMem[ip] = encode(instr); });
-  const named = ({ name, names, size, entry }) => ({ name, entry, slots: ['ret', 'link', ...names, ...Array(size - 2 - names.length).fill('tmp')] });
   return {
-    code, codeLen: code.length, initMem, usedCells: nextMem, cellLines: refs, ipMap, events, regLoops: [],
-    stackBase: nextMem, main: named(main), procs: procs.map(named),
+    code,
+    codeLen: code.length,
+    initMem,
+    usedCells: nextMem,
+    cellLines: refs,
+    ipMap,
+    events,
+    regLoops: [],
+    stackBase: nextMem,
+    main: slotNames(main),
+    procs: procs.map(slotNames),
   };
 }
