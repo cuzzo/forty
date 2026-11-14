@@ -684,10 +684,11 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
       const ln = idx + 1;
       return el('div', { class: `line${ln === activeLine ? ' active' : ''}`, text: ln === nextLine ? '>' : ' ' });
     }));
-    const focusLine = nextLine ?? activeLine;
-    if (focusLine) {
-      const top = (focusLine - 1) * 18;
-      if (top < srcBox.scrollTop || top + 34 > srcBox.scrollTop + srcBox.clientHeight) srcBox.scrollTop = Math.max(0, top - 36);
+    // The line just run stays in view, and the next line too when both fit.
+    for (const line of [nextLine, activeLine]) {
+      const top = (line - 1) * 18;
+      const hidden = top < srcBox.scrollTop || top + 34 > srcBox.scrollTop + srcBox.clientHeight;
+      if (line && hidden) srcBox.scrollTop = Math.max(0, top - 36);
     }
     linesBox.scrollTop = srcBox.scrollTop;
 
@@ -734,8 +735,10 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
         el('span', { text: `${isNext ? '>' : ' '} ${String(i).padStart(2, '0')}: ${asm(instr)}` }),
         ...(gainOf(instr) ? [badge(gainOf(instr))] : []));
       codeBox.append(row);
-      if (isNext || (nextIp === null && active)) row.scrollIntoView({ block: 'nearest' });
     });
+    // The row just run stays in view, and the next row too when both fit.
+    codeBox.querySelector(`[data-ip="${nextIp}"]`)?.scrollIntoView({ block: 'nearest' });
+    codeBox.querySelector('.line.active')?.scrollIntoView({ block: 'nearest' });
 
     renderDevices(s);
     if (has('riscv')) renderRiscv(activeIp);
