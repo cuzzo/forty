@@ -10,6 +10,14 @@ import { CARD_ROWS, COST, COST_704, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, 
 
 const EMPTY_DRUM = new Int32Array(SECTORS * SECTOR_WORDS);
 
+// A drum cell is 3 characters wide: larger numbers show in thousands, millions or billions, exactly on hover.
+const UNITS = [[1e9, 'G'], [1e6, 'M'], [1e3, 'k']];
+export function drumText(n) {
+  if (String(n).length <= 3) return String(n);
+  const [size, unit] = UNITS.find(([size]) => Math.abs(n) >= size) ?? [1, ''];
+  return `${Math.trunc(n / size)}${unit}`;
+}
+
 // The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
 export function drumLayout(skip) {
   const drum = new Int32Array(SECTORS * SECTOR_WORDS);
@@ -598,10 +606,13 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const marks = (lines) => new Set(lines.filter((line) => line >= first && line < first + SECTORS).map((line) => line - first));
     const held = marks(cache.lines.map(({ line }) => line));
     const fetched = marks(cache.fetched);
-    $('drum-head').textContent = `DRUM  main memory, track ${track}${fetched.size ? `  reading ${[...fetched].map(sec2).join(' ')}` : ''}`;
+    $('drum-head').textContent = `DRUM  track ${track}${fetched.size ? `  reading ${[...fetched].map(sec2).join(' ')}` : ''}`;
     return {
       head: headAt(cache.time),
-      words: Array.from({ length: SECTORS * SECTOR_WORDS }, (_, i) => MEM[first * SECTOR_WORDS + i] ?? ''),
+      words: Array.from({ length: SECTORS * SECTOR_WORDS }, (_, i) => {
+        const addr = first * SECTOR_WORDS + i;
+        return has('code') && prog && addr < prog.codeLen ? instruction(prog, MEM, addr) : MEM[addr] ?? '';
+      }),
       sectorClass: (sec) => `${held.has(sec) ? ' cached' : ''}${fetched.has(sec) ? ' want' : ''}`,
       wordClass: () => '',
     };
@@ -633,10 +644,15 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
       return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${sectorClass(sec)}` },
         el('span', { class: 'mark', text: d === 0 ? 'HEAD' : '' }),
         el('span', { class: 'sec', text: sec2(sec) }),
-        ...Array.from({ length: SECTOR_WORDS }, (_, w) => el('span', {
-          class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${wordClass(sec, w)}`,
-          text: String(words[sec * SECTOR_WORDS + w]),
-        })));
+        ...Array.from({ length: SECTOR_WORDS }, (_, w) => {
+          const word = words[sec * SECTOR_WORDS + w];
+          const code = Array.isArray(word);
+          return el('span', {
+            class: `w${d === 0 && w === head.word ? ' under' : ''}${d === 0 && w < head.word ? ' passed' : ''}${code ? ' code' : ''}${wordClass(sec, w)}`,
+            text: code ? word[0].slice(0, 3) : drumText(word),
+            title: code ? asm(word) : String(word),
+          });
+        }));
     }));
   }
 

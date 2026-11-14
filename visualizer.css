@@ -46,7 +46,7 @@ body { margin: 16px; font: 13px/1.4 monospace; background: #0e1116; color: #e6ed
 .legend { margin-left: auto; display: flex; gap: 12px; color: #8b949e; }
 .legend i { display: inline-block; width: 3px; height: 12px; margin-right: 5px; vertical-align: middle; }
 .legend i.box { width: 10px; height: 10px; background: none; }
-#drum { background: linear-gradient(#0e1116, #161b22 35%, #161b22 65%, #0e1116); border: 1px solid #30363d; border-radius: 10px; padding: 2px 6px; font-size: 11px; }
+#drum { overflow: hidden; background: linear-gradient(#0e1116, #161b22 35%, #161b22 65%, #0e1116); border: 1px solid #30363d; border-radius: 10px; padding: 2px 6px; font-size: 11px; }
 .sector { display: flex; gap: 3px; height: 15px; line-height: 15px; }
 .sector.above, .sector.below { opacity: 0.3; transform: scaleY(0.6); height: 10px; line-height: 10px; }
 .w.passed { opacity: 0.45; }
@@ -63,7 +63,8 @@ body { margin: 16px; font: 13px/1.4 monospace; background: #0e1116; color: #e6ed
 .sector .sec { color: #8b949e; width: 4ch; }
 .sector .mark { width: 4ch; color: #facc15; font-weight: 700; }
 .sector.at-head { height: 20px; line-height: 20px; font-weight: 700; background: #2d2a12; border-top: 1px solid #facc15; border-bottom: 1px solid #facc15; }
-.sector .w { width: 3ch; text-align: right; }
+.sector .w { min-width: 3ch; text-align: right; white-space: nowrap; }
+.sector .w.code { color: #8b949e; text-align: left; }
 .w.under { background: #facc15; color: #0e1116; }
 .w.copied { color: #fb923c; font-weight: 700; opacity: 1; }
 #cards { background: #161b22; border: 1px solid #30363d; padding: 6px; max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }

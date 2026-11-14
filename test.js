@@ -7,6 +7,7 @@ import { createVM as createV1 } from './v1/vm.js';
 import * as v6 from './v6/visualizer.js';
 import { createVM as createV6 } from './v6/vm.js';
 import * as lisp from './lisp/visualizer.js';
+import { drumText } from './visualizer.js';
 import { createVM as createLisp } from './lisp/vm.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
@@ -65,4 +66,8 @@ test('cache mode puts Lisp\'s 768 words on several drum tracks, and is off for d
   const kept = JSON.stringify(machine.getState().cache);
   assert.throws(() => machine.step(), /Division by zero/);
   assert.equal(JSON.stringify(machine.getState().cache), kept);
+});
+
+test('a drum cell shows up to 3 characters: larger numbers in thousands, millions or billions', () => {
+  assert.deepEqual([0, 120, -99, 1234, -56789, 2500000, -2147483648].map(drumText), ['0', '120', '-99', '1k', '-56k', '2M', '-2G']);
 });
