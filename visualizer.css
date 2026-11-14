@@ -27,6 +27,8 @@ body { margin: 16px; font: 13px/1.4 monospace; background: #0e1116; color: #e6ed
 .cell.bss { border-left-color: #22c55e; }
 .cell.linkage { border-left-color: #a855f7; }
 .cell.scratch { border-left-color: #f59e0b; }
+.cell.stack { border-left-color: #f472b6; }
+.cell.stack.frame { border-left-width: 8px; }
 .cell.read { outline: 2px solid #22d3ee; }
 .cell.write { outline: 2px solid #fb923c; }
 .line { padding: 2px 6px; white-space: pre; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }

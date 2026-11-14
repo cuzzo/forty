@@ -3,7 +3,7 @@
 //
 // Features: 'code' (the program is in memory, v1), 'drum' (v2), 'tape' (v3), 'cards' and 'index' (punched cards
 // and index registers, v5), 'riscv' (the program as RV32IM assembly, v4), 'accumulator' (one-address 704 code with
-// the AC and MQ, v6).
+// the AC and MQ, v6), 'stack' (a call stack in core memory, with index register C holding the frame: puck/).
 import { CARD_ROWS, COST, COST_704, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, headAt, ioWait } from './machine.js';
 
 // The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
@@ -147,7 +147,7 @@ function tupleEffect([op, a, b, c], state, { ea, label, name, val }, ALU) {
     PXD: () => `index register ${reg(b)} (${state.XR[b]}) -> ${name(a)}`,
     JMP: () => `jump to ${a}`,
     JAL: () => `call ${b}, return to ${state.ip + 1} -> ${name(a)}`,
-    JMP_IND: () => `return to ${M[a]} (from ${name(a)})`,
+    JMP_IND: () => `return to ${M[ea(a)]} (from ${name(a)})`,
     JZ: () => (M[ea(b)] === 0 ? `${val(b)} is 0: jump to ${a}` : `${val(b)} is not 0: next`),
   };
   if (op in ALU) return `${val(b)} ${op} ${val(c)} = ${ALU[op](M[ea(b)], M[ea(c)])} -> ${name(a)}`;
@@ -241,12 +241,32 @@ function describe704([op, a, b, c], m, { tagOf, addrOf }) {
   return TEXT[op]?.() ?? `${op}: unknown opcode`;
 }
 
-export function visualizer({ compiler, vm, features, drumSkip = 9 }) {
+// The frames of a call stack in core memory, each cell named procedure.slot, from the frame in index register C down
+// the links to main's at the base. A frame's procedure is the one its return address came back from a call to, or,
+// for a frame C has just moved to, the one the next instruction calls.
+export function stackLabels(prog, state) {
+  const names = [];
+  const procAt = (entry) => prog.procs.find((p) => p.entry === entry);
+  for (let c = state.XR[2]; c >= prog.stackBase;) {
+    const [op, , target] = prog.code[state.ip] ?? [];
+    const proc = c === prog.stackBase ? prog.main : procAt(c === state.XR[2] && op === 'JAL' ? target : prog.code[state.MEM[c] - 1]?.[2]);
+    if (!proc) break;
+    proc.slots.forEach((slot, k) => { names[c + k] ??= `${proc.name}.${slot}`; });
+    // Main's link is 0, below the stack.
+    const link = state.MEM[c + 1];
+    if (!(link < c)) break;
+    c = link;
+  }
+  return names;
+}
+
+// demos and language: a version that is not FORTRAN (puck/) brings its own programs and names its language.
+export function visualizer({ compiler, vm, features, drumSkip = 9, demos: ownDemos, language = 'FORTRAN' }) {
   const has = (feature) => features.includes(feature);
   const ibm704 = has('accumulator');
   const tagOf = vm.tagOf ?? (() => 0);
   const addrOf = vm.addrOf ?? ((x) => x & 127);
-  const DEMOS = demos(has, drumSkip);
+  const DEMOS = ownDemos ?? demos(has, drumSkip);
   const operand = (x) => (tagOf(x) ? `${addrOf(x)},${reg(tagOf(x) - 1)}` : String(x));
 
   // One instruction as the bytecode lists it; v6 writes it as 704 assembly does: address, then tag, then decrement.
@@ -278,7 +298,8 @@ export function visualizer({ compiler, vm, features, drumSkip = 9 }) {
     const M = state.MEM;
     // An indexed operand names the cell its address plus its register picks.
     const ea = (i) => addrOf(i) + (tagOf(i) ? state.XR[tagOf(i) - 1] : 0);
-    const label = (i) => prog.cells[i]?.label || `M[${i}]`;
+    const frames = has('stack') ? stackLabels(prog, state) : [];
+    const label = (i) => frames[i] ?? (prog.cells[i]?.label || `M[${i}]`);
     const name = (i) => (tagOf(i) ? `${label(ea(i))} [via ${reg(tagOf(i) - 1)}]` : label(i));
     const names = { ea, label, name, val: (i) => `${name(i)} (${M[ea(i)]})` };
     if (state.io) return deviceEffect(state, name);
@@ -298,7 +319,7 @@ export function visualizer({ compiler, vm, features, drumSkip = 9 }) {
     return SHARED_TEXT[instr[0]]?.(m, ...instr.slice(1)) ?? (ibm704 ? describe704(instr, m, { tagOf, addrOf }) : tupleDescribe(instr, m));
   }
 
-  const mount = () => mountPage({ has, vm, DEMOS, layout, effect, describe, asm, instruction, emitRiscv: compiler.emitRiscv });
+  const mount = () => mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, instruction, emitRiscv: compiler.emitRiscv });
   return { MEM_SIZE: vm.MEM_WORDS, DEMOS, layout, effect, describe, asm, saving, mount };
 }
 
@@ -387,11 +408,12 @@ function renderPaper(box, lines) {
   if (grew) box.scrollTop = box.scrollHeight;
 }
 
-const LEGEND = [['#6e7681', 'code'], ['#3b82f6', 'constant'], ['#22c55e', 'variable'], ['#a855f7', 'SUB arg / return'], ['#f59e0b', 'temp']];
+// Each colour, its name, and the feature it needs, if any.
+const LEGEND = [['#6e7681', 'code', 'code'], ['#3b82f6', 'constant'], ['#22c55e', 'variable'], ['#a855f7', 'SUB arg / return'], ['#f59e0b', 'temp'], ['#f472b6', 'stack frame', 'stack']];
 
-function page(has) {
-  const legend = LEGEND.filter(([, name]) => name !== 'code' || has('code')).map(([color, name]) => `<span><i style="background:${color}"></i>${name}</span>`).join('');
-  const regs = has('index') || has('accumulator') ? `<div class="head" id="regs-head">${has('index') ? 'INDEX REGISTERS' : 'REGISTERS'}</div><div id="regs"></div>` : '';
+function page(has, language) {
+  const legend = LEGEND.filter(([, , feature]) => !feature || has(feature)).map(([color, name]) => `<span><i style="background:${color}"></i>${name}</span>`).join('');
+  const regs = has('index') || has('accumulator') || has('stack') ? `<div class="head" id="regs-head">${has('index') ? 'INDEX REGISTERS' : 'REGISTERS'}</div><div id="regs"></div>` : '';
   return `
   <div class="bar">
     <button id="compile">Compile</button>
@@ -409,7 +431,7 @@ function page(has) {
   <div class="row" id="board">
     <svg id="arrow"></svg>
     <div>
-      <div class="head">FORTRAN <label class="file"><select id="demo" title="Program to run"></select></label></div>
+      <div class="head">${language} <label class="file"><select id="demo" title="Program to run"></select></label></div>
       <div class="codebox"><div class="editor"><div id="lines"></div><textarea id="src" spellcheck="false" wrap="off"></textarea></div></div>
       <div class="head">EFFECT</div><div id="effect"></div>
       <div class="head">PRINTER</div><div id="out" title="Scroll back one line at a time"></div>
@@ -425,8 +447,8 @@ function page(has) {
   </div>`;
 }
 
-function mountPage({ has, vm, DEMOS, layout, effect, describe, asm, instruction, emitRiscv }) {
-  document.body.innerHTML = page(has);
+function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, instruction, emitRiscv }) {
+  document.body.innerHTML = page(has, language);
   const $ = (id) => document.getElementById(id);
   const demoSel = $('demo');
   const srcBox = $('src');
@@ -538,7 +560,7 @@ function mountPage({ has, vm, DEMOS, layout, effect, describe, asm, instruction,
     if (has('index')) $('regs-head').textContent = `INDEX REGISTERS  saved ${run.saved()} of ${runWithout - runWith} cycles so far (whole run: ${runWith} instruction cycles, ${runWithout} without them)`;
     const acc = has('accumulator') ? [el('div', { class: 'reg acc', text: `AC (${s.AC})` }), el('div', { class: 'reg acc', text: `MQ (${s.MQ})` })] : [];
     $('regs').replaceChildren(...acc, ...[0, 1, 2].map((r) => {
-      const holder = holderOf(prog.regLoops, r, s.pc);
+      const holder = holderOf(prog.regLoops, r, s.pc) ?? (has('stack') && r === 2 && s.XR[r] ? 'frame' : undefined);
       return el('div', { class: `reg${holder ? ' live' : ''}`, text: `${reg(r)}${holder ? ` = ${holder}` : ''} (${s.XR[r]})` });
     }));
   }
@@ -591,17 +613,19 @@ function mountPage({ has, vm, DEMOS, layout, effect, describe, asm, instruction,
 
     // Code cells and free cells show only their address, so the cells in use get the room.
     const codeLen = has('code') ? prog.codeLen : 0;
+    const frames = has('stack') && !view ? stackLabels(prog, s) : [];
     const codeCells = [];
     const dataCells = [];
     const freeCells = [];
     for (let i = 0; i < prog.initMem.length; i++) {
       const isCode = i < codeLen;
-      const placed = isCode ? code[i] !== undefined : i < (view ? view.cells : prog.usedCells);
+      const placed = isCode ? code[i] !== undefined : i < (view ? view.cells : prog.usedCells) || i in frames;
       if (!placed) {
         (isCode ? codeCells : freeCells).push(el('div', { class: 'cell code unused' }, el('small', { text: String(i).padStart(2, '0') })));
         continue;
       }
-      const cell = prog.cells[i];
+      // A frame's first cell, its return address, gets the role 'stack frame' to mark where the frame starts.
+      const cell = i in frames ? { role: frames[i].endsWith('.ret') ? 'stack frame' : 'stack', label: frames[i] } : prog.cells[i];
       const fresh = view && (view.newCell !== null ? i >= view.newCell : i === view.newIp);
       const flash = writes.has(i) || fresh ? ' write' : (reads.has(i) ? ' read' : '');
       (isCode ? codeCells : dataCells).push(el('div', {
@@ -751,6 +775,6 @@ function mountPage({ has, vm, DEMOS, layout, effect, describe, asm, instruction,
   codeBox.addEventListener('scroll', drawArrow);
   window.addEventListener('resize', drawArrow);
 
-  srcBox.value = DEMOS.factorial.code;
+  srcBox.value = Object.values(DEMOS)[0].code;
   render();
 }
