@@ -10,11 +10,21 @@ import { CARD_ROWS, COST, COST_704, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, 
 
 const EMPTY_DRUM = new Int32Array(SECTORS * SECTOR_WORDS);
 
-// A drum cell is 3 characters wide: larger numbers show in thousands, millions or billions, exactly on hover.
-const UNITS = [[1e9, 'G'], [1e6, 'M'], [1e3, 'k']];
+const UNITS = [[1e9, 'b'], [1e6, 'm'], [1e3, 'k']];
+const unitOf = (n) => UNITS.find(([size]) => Math.abs(n) >= size) ?? [1, ''];
+
+// A count in thousands, millions or billions, to one decimal under 10: 25028 is 25k, 1500000 is 1.5m.
+export function short(n) {
+  if (typeof n !== 'number') return String(n);
+  const [size, unit] = unitOf(n);
+  const scaled = n / size;
+  return `${size > 1 && Math.abs(scaled) < 10 ? Math.trunc(scaled * 10) / 10 : Math.trunc(scaled)}${unit}`;
+}
+
+// A drum cell is 3 characters wide: larger numbers show in whole thousands, millions or billions, exactly on hover.
 export function drumText(n) {
   if (String(n).length <= 3) return String(n);
-  const [size, unit] = UNITS.find(([size]) => Math.abs(n) >= size) ?? [1, ''];
+  const [size, unit] = unitOf(n);
   return `${Math.trunc(n / size)}${unit}`;
 }
 
@@ -692,7 +702,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
   }
 
   function renderRegisters(s) {
-    if (has('index')) $('regs-head').textContent = `INDEX REGISTERS  saved ${run.saved()} of ${runWithout - runWith} cycles so far (whole run: ${runWith} instruction cycles, ${runWithout} without them)`;
+    if (has('index')) $('regs-head').textContent = `INDEX REGISTERS  saved ${short(run.saved())} of ${short(runWithout - runWith)} cycles so far (whole run: ${short(runWith)} instruction cycles, ${short(runWithout)} without them)`;
     const acc = has('accumulator') ? [el('div', { class: 'reg acc', text: `AC (${s.AC})` }), el('div', { class: 'reg acc', text: `MQ (${s.MQ})` })] : [];
     $('regs').replaceChildren(...acc, ...[0, 1, 2].map((r) => {
       const holder = holderOf(prog.regLoops, r, s.pc) ?? (has('stack') && r === 2 && s.XR[r] ? 'frame' : undefined);
@@ -713,7 +723,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const { lines, hits, misses, stalled } = s.cache;
     const cells = (line) => `${line * SECTOR_WORDS}-${(line + 1) * SECTOR_WORDS - 1}`;
     const held = lines.map(({ line, dirty }) => `${cells(line)}${dirty ? '*' : ''}`);
-    return `MEMORY  cache: ${held.join(' ') || 'empty'}  ·  ${hits} hits, ${misses} misses, ${stalled} cycles on the drum`;
+    return `MEMORY  cache: ${held.join(' ') || 'empty'}  ·  ${short(hits)} hits, ${short(misses)} misses, ${short(stalled)} cycles on the drum`;
   }
 
   const badge = (n) => el('span', { class: `gain${n < 0 ? ' cost' : ''}`, text: n > 0 ? `+${n}` : `−${-n}` });
@@ -751,7 +761,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     const writes = new Set(last.writes);
     const code = view ? view.code : prog.code.map((_, i) => instruction(prog, s.MEM, i));
 
-    const clock = 'cycles' in s ? [['CYCLE', s.cycles], ['WAITED', s.waited]] : [['STEPS', s.steps]];
+    const clock = 'cycles' in s ? [['CYCLE', short(s.cycles)], ['WAITED', short(s.waited)]] : [['STEPS', short(s.steps)]];
     if (view) renderStatus([['COMPILING', `${building} of ${prog.events.length}`]], []);
     else renderStatus([['PC', s.pc ?? '-'], ['NEXT', s.halted ? 'halted' : nextIp ?? '-']], clock);
     effectBox.textContent = view ? '' : effect(prog, s) + (s.io || s.halted ? '' : savingNote(gainOf(instruction(prog, s.MEM, s.ip))));

@@ -7,7 +7,7 @@ import { createVM as createV1 } from './v1/vm.js';
 import * as v6 from './v6/visualizer.js';
 import { createVM as createV6 } from './v6/vm.js';
 import * as lisp from './lisp/visualizer.js';
-import { drumText } from './visualizer.js';
+import { drumText, short } from './visualizer.js';
 import { createVM as createLisp } from './lisp/vm.js';
 
 const TURN = SECTORS * SECTOR_WORDS * DRUM_WORD_CYCLES;
@@ -69,5 +69,9 @@ test('cache mode puts Lisp\'s 768 words on several drum tracks, and is off for d
 });
 
 test('a drum cell shows up to 3 characters: larger numbers in thousands, millions or billions', () => {
-  assert.deepEqual([0, 120, -99, 1234, -56789, 2500000, -2147483648].map(drumText), ['0', '120', '-99', '1k', '-56k', '2M', '-2G']);
+  assert.deepEqual([0, 120, -99, 1234, -56789, 2500000, -2147483648].map(drumText), ['0', '120', '-99', '1k', '-56k', '2m', '-2b']);
+});
+
+test('cycle counts show in thousands, millions or billions, to one decimal under 10', () => {
+  assert.deepEqual([0, 999, 1328, 25028, 700000, 1500000, 9999999, 12345678, 2.5e9, '?'].map(short), ['0', '999', '1.3k', '25k', '700k', '1.5m', '9.9m', '12m', '2.5b', '?']);
 });
