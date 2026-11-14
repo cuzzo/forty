@@ -8,6 +8,8 @@
 import { CACHE_LINES, cacheable, cached, lineOf } from './cache.js';
 import { CARD_ROWS, COST, COST_704, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, headAt, ioWait } from './machine.js';
 
+const EMPTY_DRUM = new Int32Array(SECTORS * SECTOR_WORDS);
+
 // The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
 export function drumLayout(skip) {
   const drum = new Int32Array(SECTORS * SECTOR_WORDS);
@@ -618,8 +620,14 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
     };
   }
 
+  // A language that never reads the drum leaves it empty until cache mode makes it main memory.
+  function unusedDrum({ cycles, steps }) {
+    $('drum-head').textContent = 'DRUM  unused until cache is on';
+    return { head: headAt(cycles ?? 2 * (steps ?? 0)), words: EMPTY_DRUM, sectorClass: () => '', wordClass: () => '' };
+  }
+
   function renderDrum(s) {
-    const { head, words, sectorClass, wordClass } = s.cache ? mainMemoryDrum(s) : deviceDrum(s);
+    const { head, words, sectorClass, wordClass } = s.cache ? mainMemoryDrum(s) : has('drum') ? deviceDrum(s) : unusedDrum(s);
     $('drum').replaceChildren(...[-1, 0, 1].map((d) => {
       const sec = (head.sector + d + SECTORS) % SECTORS;
       return el('div', { class: `sector ${['above', 'at-head', 'below'][d + 1]}${sectorClass(sec)}` },
@@ -651,9 +659,7 @@ function mountPage({ has, vm, DEMOS, language, layout, effect, describe, asm, in
 
   // The drum and tape as a machine state has them.
   function renderDevices(s) {
-    const drumShown = has('drum') || Boolean(s.cache);
-    $('drum-head').hidden = $('drum').hidden = !drumShown;
-    if (drumShown) renderDrum(s);
+    renderDrum(s);
     if (has('tape')) renderTape(s);
   }
 
