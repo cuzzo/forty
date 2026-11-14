@@ -1,21 +1,11 @@
-const PREC = {
-  '==': 1, '!=': 1, '<': 1, '>': 1, '<=': 1, '>=': 1,
-  '+': 2, '-': 2, '*': 3, '/': 3,
-};
+import { encode } from './vm.js';
 
-const CMP_RISCV = {
-  '<':  ['    slt t0, t0, t1'],
-  '>':  ['    slt t0, t1, t0'],
-  '<=': ['    slt t0, t1, t0', '    xori t0, t0, 1'],
-  '>=': ['    slt t0, t0, t1', '    xori t0, t0, 1'],
-  '==': ['    sub t0, t0, t1', '    seqz t0, t0'],
-  '!=': ['    sub t0, t0, t1', '    snez t0, t0'],
-};
-
-const ALU_RISCV = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div' };
+const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
 
 // The last token of every program; it has a space, so no source text can be it.
 const END = 'end of input';
+
+const PREC = { '==': 1, '!=': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '+': 2, '-': 2, '*': 3, '/': 3 };
 
 export function tokenize(source) {
   const re = /#[^\n]*|\n|[A-Za-z_]\w*|\d+|==|!=|<=|>=|\S/g;
@@ -29,55 +19,63 @@ export function tokenize(source) {
   return tokens;
 }
 
-const span = (dims) => (dims ? dims[0] * (dims[1] ?? 1) : 1);
+// Code fills MEM[0..] one instruction per cell, so data starts where the code ends.
+export function compile(source, memSize = 256) {
+  return build(source, memSize, build(source, memSize, 0).codeLen);
+}
 
-export function compile(source, { memSize = 256 } = {}) {
+function build(source, memSize, dataBase) {
   const tokens = tokenize(source);
+  const initMem = new Int32Array(memSize);
+  const refs = Array.from({ length: memSize }, () => new Set());
   const consts = new Map();
   const subs = Object.create(null);
   const code = [];
-  const compileEvents = [];
   const ipMap = [];
-  const allocs = [];
-  const aliases = [];
-  const initMem = new Int32Array(memSize);
-  let pos = 0;
-  let nextMem = 0;
+  const events = [];
   let sym = Object.create(null);
-  let currentLine = 1;
+  let pos = 0;
+  let nextMem = dataBase;
+  let line = 1;
 
-  function alloc(size = 1, role = 'scratch', label = '', dims = null) {
-    if (nextMem + size > memSize) throw new Error(`Compile-time static RAM overflow (${memSize} cells)`);
+  function touch(addr, size = 1) {
+    for (let i = 0; i < size; i++) refs[addr + i].add(line);
+  }
+
+  function alloc(size = 1, role = 'scratch', label = '') {
+    if (nextMem + size > memSize) throw new Error(`Program does not fit in ${memSize} cells of RAM`);
     const base = nextMem;
     nextMem += size;
-    allocs.push({ base, size, role, label, dims });
+    touch(base, size);
+    events.push({ kind: 'alloc', base, size, line, role, label });
     return base;
   }
 
   function emit(op, a, b, c) {
     const ip = code.length;
     code.push([op, a, b, c]);
-    ipMap.push(currentLine);
-    compileEvents.push({ kind: 'emit', ip, instr: code[ip], line: currentLine });
+    ipMap.push(line);
+    events.push({ kind: 'emit', ip, instr: code[ip], line });
     return ip;
   }
 
   function patch(ip, instr) {
     code[ip] = instr;
-    compileEvents.push({ kind: 'patch', ip, instr, line: currentLine });
+    events.push({ kind: 'patch', ip, instr, line });
   }
 
   function defConst(val) {
-    const num = Number(val) | 0;
-    if (consts.has(num)) return consts.get(num);
-    const addr = alloc(1, 'rodata', `const(${num})`);
-    initMem[addr] = num;
-    consts.set(num, addr);
+    const n = Number(val) | 0;
+    if (consts.has(n)) { touch(consts.get(n)); return consts.get(n); }
+    const addr = alloc(1, 'rodata', `const(${n})`);
+    initMem[addr] = n;
+    consts.set(n, addr);
     return addr;
   }
 
   function getVar(name) {
     if (!(name in sym)) sym[name] = { mode: 'DIR', addr: alloc(1, 'bss', name), dims: null };
+    touch(sym[name].addr, span(sym[name].dims));
     return sym[name];
   }
 
@@ -85,29 +83,22 @@ export function compile(source, { memSize = 256 } = {}) {
 
   function eat(expected = null) {
     const tok = tokens[pos];
-    if (tok.text === END && expected !== END) throw new SyntaxError(`Unexpected end of input (line ${currentLine})`);
+    if (tok.text === END && expected !== END) throw new SyntaxError('Unexpected end of input');
     pos++;
-    currentLine = tok.line;
-    if (expected && tok.text !== expected) {
-      throw new SyntaxError(`Expected '${expected}', got '${tok.text}' at line ${tok.line}`);
-    }
+    line = tok.line;
+    if (expected && tok.text !== expected) throw new SyntaxError(`Expected '${expected}', got '${tok.text}'`);
     return tok.text;
   }
 
   function valAddr(opnd) {
     if (opnd.mode === 'DIR') return opnd.addr;
-    const tmp = alloc(1, 'scratch', `deref_${opnd.addr}`);
+    const tmp = alloc(1);
     emit('LOAD_IND', tmp, opnd.addr, 0);
     return tmp;
   }
 
   function ptrAddr(opnd) {
     return opnd.mode === 'IND' ? opnd.addr : defConst(opnd.addr);
-  }
-
-  // Where a value bound for this place is written: the place itself, or a temporary that store() copies in.
-  function into(place) {
-    return place.mode === 'DIR' ? place.addr : alloc(1, 'scratch', 'tape_in');
   }
 
   // A value held directly is already in place when it was computed there.
@@ -121,34 +112,28 @@ export function compile(source, { memSize = 256 } = {}) {
     if (peek() !== '(') return { name, dims: null };
     eat('(');
     const dims = [Number(eat())];
-    if (peek() === ',') {
-      eat(',');
-      dims.push(Number(eat()));
-    }
+    if (peek() === ',') { eat(','); dims.push(Number(eat())); }
     eat(')');
     return { name, dims };
   }
 
   function parseLValue() {
     const tok = eat();
-    if (!/^[A-Za-z_]/.test(tok)) {
-      throw new SyntaxError(`Expected identifier, got '${tok}' at line ${currentLine}`);
-    }
+    if (!/^[A-Za-z_]/.test(tok)) throw new SyntaxError(`Expected identifier, got '${tok}'`);
     const place = getVar(tok);
     if (peek() !== '[') return place;
     eat('[');
     let idx = valAddr(parseExpr());
     if (peek() === ',') {
       eat(',');
-      const col = valAddr(parseExpr());
-      const cOff = alloc(1, 'scratch', `${tok}_col_off`);
-      emit('*', cOff, col, defConst(place.dims[0]));
-      const tot = alloc(1, 'scratch', `${tok}_idx`);
+      const cOff = alloc(1);
+      emit('*', cOff, valAddr(parseExpr()), defConst(place.dims[0]));
+      const tot = alloc(1);
       emit('+', tot, idx, cOff);
       idx = tot;
     }
     eat(']');
-    const ptr = alloc(1, 'scratch', `&${tok}_elem`);
+    const ptr = alloc(1);
     emit('+', ptr, ptrAddr(place), idx);
     return { mode: 'IND', addr: ptr };
   }
@@ -158,15 +143,21 @@ export function compile(source, { memSize = 256 } = {}) {
     if (/^\d+$/.test(t)) return { mode: 'DIR', addr: defConst(eat()) };
     if (t === '-') {
       eat('-');
-      const dst = alloc(1, 'scratch', 'neg_tmp');
+      const dst = alloc(1);
       emit('-', dst, defConst(0), valAddr(parseAtom()));
       return { mode: 'DIR', addr: dst };
     }
-    if (t === '(') {
+    if (t === '(') { eat('('); const e = parseExpr(); eat(')'); return e; }
+    if (t === 'MOD') {
+      eat('MOD');
       eat('(');
-      const e = parseExpr();
+      const x = valAddr(parseExpr());
+      eat(',');
+      const y = valAddr(parseExpr());
       eat(')');
-      return e;
+      const dst = alloc(1);
+      emit('%', dst, x, y);
+      return { mode: 'DIR', addr: dst };
     }
     return parseLValue();
   }
@@ -176,79 +167,40 @@ export function compile(source, { memSize = 256 } = {}) {
     while (peek() in PREC && PREC[peek()] >= minPrec) {
       const op = eat();
       const rhs = parseExpr(PREC[op] + 1);
-      const dst = alloc(1, 'scratch', `alu_${op}`);
+      const dst = alloc(1);
       emit(op, dst, valAddr(lhs), valAddr(rhs));
       lhs = { mode: 'DIR', addr: dst };
     }
     return lhs;
   }
 
-  function parseUnitOpt() {
-    if (peek() !== '(') return defConst(0);
-    eat('(');
-    const unit = valAddr(parseExpr());
-    eat(')');
-    return unit;
-  }
-
   function parseDim() {
     const { name, dims } = parseDecl();
     if (sym[name]?.mode === 'IND') sym[name].dims = dims;
-    else sym[name] = { mode: 'DIR', addr: alloc(span(dims), 'bss', name, dims), dims };
+    else sym[name] = { mode: 'DIR', addr: alloc(span(dims), 'bss', name), dims };
   }
 
   function parseEquiv() {
     const { name, dims } = parseDecl();
     eat('=');
     sym[name] = { ...getVar(eat()), dims };
-    aliases.push({ name, addr: sym[name].addr, dims });
   }
 
   function parseRead() {
-    const unit = parseUnitOpt();
-    const value = parseLValue();
-    let eof = null;
-    let flag = -1;
-    if (peek() === ',') {
+    const device = eat();
+    if (device !== 'DRUM' && device !== 'TAPE') throw new SyntaxError(`Expected DRUM or TAPE, got '${device}'`);
+    let sector = 0;
+    if (device === 'DRUM') {
+      sector = valAddr(parseExpr());
       eat(',');
-      eof = parseLValue();
-      flag = into(eof);
     }
-    const dst = into(value);
-    emit('TAPE_READ', dst, unit, flag);
-    store(value, dst);
-    if (eof) store(eof, flag);
-  }
-
-  function parseWrite() {
-    const unit = parseUnitOpt();
-    emit('TAPE_WRITE', valAddr(parseExpr()), unit, 0);
+    // FORTRAN reads as many words as the list names: here the whole array.
+    const list = parseLValue();
+    emit(`${device}_READ`, ptrAddr(list), sector, span(list.dims));
   }
 
   function parseRewind() {
-    emit('TAPE_REWIND', parseUnitOpt(), 0, 0);
-  }
-
-  function parseDrumRead() {
-    eat('(');
-    const trk = valAddr(parseExpr());
-    eat(',');
-    const sec = valAddr(parseExpr());
-    eat(',');
-    const dstPtr = ptrAddr(parseLValue());
-    eat(')');
-    emit('DRUM_READ', dstPtr, trk, sec);
-  }
-
-  function parseDrumWrite() {
-    eat('(');
-    const trk = valAddr(parseExpr());
-    eat(',');
-    const sec = valAddr(parseExpr());
-    eat(',');
-    const srcPtr = ptrAddr(parseExpr());
-    eat(')');
-    emit('DRUM_WRITE', srcPtr, trk, sec);
+    emit('REWIND', 0, 0, 0);
   }
 
   function parsePrint() {
@@ -280,7 +232,7 @@ export function compile(source, { memSize = 256 } = {}) {
     const stop = valAddr(parseExpr());
     store(v, start);
     const loopTop = code.length;
-    const cmpTmp = alloc(1, 'scratch', 'do_cmp');
+    const cmpTmp = alloc(1);
     emit('<=', cmpTmp, valAddr(v), stop);
     const exitIdx = emit('JZ', 0, cmpTmp, 0);
     parseBlock();
@@ -292,16 +244,6 @@ export function compile(source, { memSize = 256 } = {}) {
     patch(exitIdx, ['JZ', code.length, cmpTmp, 0]);
   }
 
-  function parseWhile() {
-    const loopTop = code.length;
-    const cond = valAddr(parseExpr());
-    const exitIdx = emit('JZ', 0, cond, 0);
-    parseBlock();
-    eat('END');
-    emit('JMP', loopTop, 0, 0);
-    patch(exitIdx, ['JZ', code.length, cond, 0]);
-  }
-
   function parseSub() {
     const name = eat();
     eat('(');
@@ -310,13 +252,13 @@ export function compile(source, { memSize = 256 } = {}) {
     const params = [];
     while (peek() !== ')') {
       const p = eat();
-      const pAddr = alloc(1, 'linkage_param', `${name}.${p}`);
+      const pAddr = alloc(1, 'linkage', `${name}.${p}`);
       sym[p] = { mode: 'IND', addr: pAddr, dims: null };
       params.push(pAddr);
       if (peek() === ',') eat(',');
     }
     eat(')');
-    const retSlot = alloc(1, 'linkage_ret', `${name}.ret`);
+    const retSlot = alloc(1, 'linkage', `${name}.ret`);
     const skipIdx = emit('JMP', 0, 0, 0);
     subs[name] = { entryIp: code.length, retSlot, params };
     parseBlock();
@@ -332,32 +274,19 @@ export function compile(source, { memSize = 256 } = {}) {
     const sub = subs[name];
     for (let i = 0; i < sub.params.length; i++) {
       if (i > 0) eat(',');
+      touch(sub.params[i]);
       emit('MOV', sub.params[i], ptrAddr(parseExpr()), 0);
     }
     eat(')');
+    touch(sub.retSlot);
     emit('JAL', sub.retSlot, sub.entryIp, 0);
   }
 
-  const STATEMENTS = {
-    __proto__: null,
-    DIM: parseDim,
-    EQUIV: parseEquiv,
-    PRINT: parsePrint,
-    READ: parseRead,
-    WRITE: parseWrite,
-    REWIND: parseRewind,
-    DRUM_READ: parseDrumRead,
-    DRUM_WRITE: parseDrumWrite,
-    IF: parseIf,
-    DO: parseDo,
-    WHILE: parseWhile,
-    SUB: parseSub,
-    CALL: parseCall,
-  };
+  const STATEMENTS = { __proto__: null, DIM: parseDim, EQUIV: parseEquiv, READ: parseRead, REWIND: parseRewind, PRINT: parsePrint, IF: parseIf, DO: parseDo, SUB: parseSub, CALL: parseCall };
 
   function parseBlock() {
     while (peek() !== 'END' && peek() !== 'ELSE' && peek() !== END) {
-      currentLine = tokens[pos].line;
+      line = tokens[pos].line;
       const statement = STATEMENTS[peek()];
       if (statement) {
         eat();
@@ -372,63 +301,47 @@ export function compile(source, { memSize = 256 } = {}) {
 
   parseBlock();
   eat(END);
-  return { code, initMem, usedCells: nextMem, debug: { allocs, aliases, symbols: { ...sym }, subs, compileEvents, ipMap } };
+  emit('HALT', 0, 0, 0);
+  code.forEach((instr, ip) => { initMem[ip] = encode(instr); });
+  return { code, codeLen: code.length, initMem, usedCells: nextMem, cellLines: refs, sym, subs, ipMap, events };
 }
 
-export function emitRiscv(code, initMem, usedCells) {
-  const words = Array.from(initMem.subarray(0, usedCells)).join(', ');
-  const asm = [
-    '.data',
-    `MEM: .word ${words}`,
-    '.text',
-    '.globl main',
-    'main:',
-    '    la s0, MEM',
-  ];
+const RISCV = {
+  '+': ['add t0, t0, t1'],
+  '-': ['sub t0, t0, t1'],
+  '*': ['mul t0, t0, t1'],
+  '/': ['div t0, t0, t1'],
+  '%': ['rem t0, t0, t1'],
+  '<': ['slt t0, t0, t1'],
+  '>': ['slt t0, t1, t0'],
+  '<=': ['slt t0, t1, t0', 'xori t0, t0, 1'],
+  '>=': ['slt t0, t0, t1', 'xori t0, t0, 1'],
+  '==': ['sub t0, t0, t1', 'seqz t0, t0'],
+  '!=': ['sub t0, t0, t1', 'snez t0, t0'],
+};
 
-  for (let i = 0; i < code.length; i++) {
-    const [op, a, b, c] = code[i];
-    const A = a * 4;
-    const B = b * 4;
-    const C = c * 4;
-    asm.push(`L_${i}:`);
-
-    if (op === 'MOV') {
-      asm.push(`    lw t0, ${B}(s0)`, `    sw t0, ${A}(s0)`);
-    } else if (op === 'LOAD_IND') {
-      asm.push(`    lw t0, ${B}(s0)`, '    slli t0, t0, 2', '    add t0, s0, t0', '    lw t1, 0(t0)', `    sw t1, ${A}(s0)`);
-    } else if (op === 'STORE_IND') {
-      asm.push(`    lw t0, ${A}(s0)`, '    slli t0, t0, 2', '    add t0, s0, t0', `    lw t1, ${B}(s0)`, '    sw t1, 0(t0)');
-    } else if (op === 'JAL') {
-      asm.push(`    la t0, L_${i + 1}`, `    sw t0, ${A}(s0)`, `    j L_${b}`);
-    } else if (op === 'JMP') {
-      asm.push(`    j L_${a}`);
-    } else if (op === 'JMP_IND') {
-      asm.push(`    lw t0, ${A}(s0)`, '    jr t0');
-    } else if (op === 'JZ') {
-      asm.push(`    lw t0, ${B}(s0)`, `    beqz t0, L_${a}`);
-    } else if (op === 'PRINT') {
-      asm.push(`    lw a0, ${A}(s0)`, '    li a7, 1', '    ecall', '    li a0, 10', '    li a7, 11', '    ecall');
-    } else if (op === 'TAPE_READ') {
-      asm.push(`    lw a2, ${B}(s0)`, `    li a3, ${c >= 0 ? 1 : 0}`, '    li a7, 20', '    ecall', `    sw a0, ${A}(s0)`);
-      if (c >= 0) asm.push(`    sw a1, ${C}(s0)`);
-    } else if (op === 'TAPE_WRITE') {
-      asm.push(`    lw a0, ${A}(s0)`, `    lw a1, ${B}(s0)`, '    li a7, 21', '    ecall');
-    } else if (op === 'TAPE_REWIND') {
-      asm.push(`    lw a1, ${A}(s0)`, '    li a7, 22', '    ecall');
-    } else if (op === 'DRUM_READ') {
-      asm.push(`    lw a0, ${A}(s0)`, '    slli a0, a0, 2', `    lw a1, ${B}(s0)`, `    lw a2, ${C}(s0)`, '    li a7, 23', '    ecall');
-    } else if (op === 'DRUM_WRITE') {
-      asm.push(`    lw a0, ${A}(s0)`, '    slli a0, a0, 2', `    lw a1, ${B}(s0)`, `    lw a2, ${C}(s0)`, '    li a7, 24', '    ecall');
-    } else if (op in ALU_RISCV) {
-      asm.push(`    lw t0, ${B}(s0)`, `    lw t1, ${C}(s0)`, `    ${ALU_RISCV[op]} t0, t0, t1`, `    sw t0, ${A}(s0)`);
-    } else if (op in CMP_RISCV) {
-      asm.push(`    lw t0, ${B}(s0)`, `    lw t1, ${C}(s0)`, ...CMP_RISCV[op], `    sw t0, ${A}(s0)`);
-    } else {
-      throw new Error(`Unsupported opcode in RV32IM emitter: ${op}`);
-    }
-  }
-
-  asm.push(`L_${code.length}:`, '    li a7, 10', '    ecall');
-  return asm.join('\n');
+// The 4-tuples as RV32IM assembly. Memory is one array of words, MEM, with its address in s0: cell n is at byte 4n.
+// Label L_n marks instruction n, so jumps keep their numbers. The cells that held the 4-tuples stay 0: RISC-V runs
+// the code itself. RISC-V machines have no drum or tape.
+export function emitRiscv({ code, initMem, usedCells }) {
+  const words = Array.from(initMem.subarray(0, usedCells), (word, n) => (n < code.length ? 0 : word));
+  const out = ['.data', `MEM: .word ${words.join(', ')}`, '.text', '.globl main', 'main:', '    la s0, MEM'];
+  code.forEach(([op, a, b, c], i) => {
+    const [A, B, C] = [4 * a, 4 * b, 4 * c];
+    const ADDRESS_IN_T0 = ['slli t0, t0, 2', 'add t0, s0, t0'];
+    const lines = {
+      HALT: ['li a7, 10', 'ecall'],
+      MOV: [`lw t0, ${B}(s0)`, `sw t0, ${A}(s0)`],
+      LOAD_IND: [`lw t0, ${B}(s0)`, ...ADDRESS_IN_T0, 'lw t1, 0(t0)', `sw t1, ${A}(s0)`],
+      STORE_IND: [`lw t0, ${A}(s0)`, ...ADDRESS_IN_T0, `lw t1, ${B}(s0)`, 'sw t1, 0(t0)'],
+      PRINT: [`lw a0, ${A}(s0)`, 'li a7, 1', 'ecall', 'li a0, 10', 'li a7, 11', 'ecall'],
+      JMP: [`j L_${a}`],
+      JZ: [`lw t0, ${B}(s0)`, `beqz t0, L_${a}`],
+      JAL: [`la t0, L_${i + 1}`, `sw t0, ${A}(s0)`, `j L_${b}`],
+      JMP_IND: [`lw t0, ${A}(s0)`, 'jr t0'],
+    }[op] ?? (RISCV[op] && [`lw t0, ${B}(s0)`, `lw t1, ${C}(s0)`, ...RISCV[op], `sw t0, ${A}(s0)`]);
+    if (!lines) throw new Error(`${op} has no RISC-V version: RISC-V machines have no drum or tape`);
+    out.push(`L_${i}:`, ...lines.map((line) => `    ${line}`));
+  });
+  return out.join('\n');
 }

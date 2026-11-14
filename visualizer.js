@@ -2,7 +2,8 @@
 // features it has covered so far; the page shows those parts and no others.
 //
 // Features: 'code' (the program is in memory, v1), 'drum' (v2), 'tape' (v3), 'cards' and 'index' (punched cards
-// and index registers, v5), 'accumulator' (one-address 704 code with the AC and MQ, v6).
+// and index registers, v5), 'riscv' (the program as RV32IM assembly, v4), 'accumulator' (one-address 704 code with
+// the AC and MQ, v6).
 import { CARD_ROWS, COST, COST_704, DRUM_WORD_CYCLES, GAP, ROW_CYCLES, RECORDS, RECORD_SPAN, RECORD_WORDS, SECTORS, SECTOR_WORDS, TAPE_WORD_CYCLES, headAt, ioWait } from './machine.js';
 
 // The 128-word array 1, 2, ... on the drum: 16 blocks of 8, block K stored in sector MOD(K * skip, 32).
@@ -297,7 +298,7 @@ export function visualizer({ compiler, vm, memSize, features, drumSkip = 9 }) {
     return IO_TEXT[instr[0]]?.(m, ...instr.slice(1)) ?? (ibm704 ? describe704(instr, m, { tagOf, addrOf }) : tupleDescribe(instr, m, vm.ALU));
   }
 
-  const mount = () => mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, instruction });
+  const mount = () => mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, instruction, emitRiscv: compiler.emitRiscv });
   return { MEM_SIZE: memSize, DEMOS, layout, effect, describe, asm, saving, mount };
 }
 
@@ -384,12 +385,13 @@ function page(has) {
       <div class="head">BYTECODE</div><div id="code"></div>
       ${has('drum') ? '<div class="head" id="drum-head">DRUM</div><div id="drum"></div>' : ''}
       ${has('tape') ? '<div class="head" id="tape-head">TAPE</div><div id="tape"></div>' : ''}
+      ${has('riscv') ? '<div class="head">RISC-V</div><div id="riscv"></div>' : ''}
     </div>
     <div>${regs}<div class="head">MEMORY</div><div id="ram"></div></div>
   </div>`;
 }
 
-function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, instruction }) {
+function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, instruction, emitRiscv }) {
   document.body.innerHTML = page(has);
   const $ = (id) => document.getElementById(id);
   const demoSel = $('demo');
@@ -407,6 +409,8 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
   for (const [k, d] of Object.entries(DEMOS)) demoSel.append(el('option', { value: k, text: d.name }));
 
   let prog = null;
+  // v4: the program's RV32IM assembly, one line per row, or why it has none.
+  let riscv = [];
   let machine = null;
   let last = { reads: [], writes: [] };
   let timer = null;
@@ -480,6 +484,18 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
     }));
   }
 
+  // The RISC-V lines of the instruction executed last are highlighted, as its bytecode row is.
+  function renderRiscv(activeIp) {
+    let ip = null;
+    $('riscv').replaceChildren(...riscv.map((text) => {
+      ip = /^L_(\d+):$/.exec(text)?.[1] ?? ip;
+      return el('div', { class: `line${ip !== null && Number(ip) === activeIp ? ' active' : ''}`, text });
+    }));
+    const block = $('riscv').querySelectorAll('.active');
+    block[block.length - 1]?.scrollIntoView({ block: 'nearest' });
+    block[0]?.scrollIntoView({ block: 'nearest' });
+  }
+
   function renderRegisters(s) {
     if (has('index')) $('regs-head').textContent = `INDEX REGISTERS  saved ${saved} of ${runWithout - runWith} cycles so far (whole run: ${runWith} instruction cycles, ${runWithout} without them)`;
     const acc = has('accumulator') ? [el('div', { class: 'reg acc', text: `AC (${s.AC})` }), el('div', { class: 'reg acc', text: `MQ (${s.MQ})` })] : [];
@@ -501,6 +517,7 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
       effectBox.textContent = '';
       renderPaper(outBox, []);
       if (has('cards')) $('cards').replaceChildren();
+      if (has('riscv')) $('riscv').replaceChildren();
       if ($('regs')) $('regs').replaceChildren();
       linesBox.replaceChildren(...srcBox.value.split('\n').map(() => el('div', { class: 'line', text: ' ' })));
       linesBox.scrollTop = srcBox.scrollTop;
@@ -582,6 +599,7 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
 
     if (has('drum')) renderDrum(s.DRUM, s.cycles, s.io);
     if (has('tape')) renderTape(s.TAPE, s.tapePos, s.io);
+    if (has('riscv')) renderRiscv(activeIp);
     requestAnimationFrame(drawArrow);
   }
 
@@ -605,6 +623,13 @@ function mountPage({ has, vm, memSize, DEMOS, layout, effect, describe, asm, ins
   function load(walk) {
     prog = layout(srcBox.value, memSize);
     machine = start(prog);
+    if (has('riscv')) {
+      try {
+        riscv = emitRiscv(prog).split('\n');
+      } catch (e) {
+        riscv = [e.message];
+      }
+    }
     last = { reads: [], writes: [] };
     building = walk ? 0 : null;
     batches.length = 0;
